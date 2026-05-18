@@ -240,11 +240,11 @@ def _from_preset(name: str, preset: ProviderPreset, model_override: str | None) 
         p = AnthropicProvider(name=name, api_key=key, model=preset.default_model,
                               role_models=dict(preset.role_models))
     elif preset.kind == "openai_compatible":
-        key = os.environ.get(preset.key_env, "")
+        key = os.environ.get(preset.key_env, "") if preset.key_env else ""
         if not key:
-            # Special-case ollama: any non-empty value works
-            if name == "ollama":
-                key = "ollama"
+            # Local providers (ollama, jan) need no real API key
+            if name in ("ollama", "jan"):
+                key = name
             else:
                 raise RuntimeError(f"{preset.key_env} is not set (required for provider '{name}')")
         p = OpenAIProvider(

@@ -167,7 +167,7 @@ class RelayAgent:
         intent_src = f"{user_input}\n\n---\n{source}" if source else user_input
         intent_result = await self._si.run("intent", intent_src, model=model)
         intent = intent_result.output if isinstance(intent_result.output, dict) else {}
-        provider = "ollama"  # default; updated if Jan used
+        provider = intent_result.provider  # "ollama" | "jan" | "none"
 
         # Step 2: Select tools
         selected = _select_tools(intent, bool(source.strip()))
