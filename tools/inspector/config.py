@@ -301,6 +301,36 @@ SKILL_INDEX: dict[str, SkillDef] = {
         temperature=0.2,
         max_tokens=1024,
     ),
+
+    "prompt_polish": SkillDef(
+        name="prompt_polish",
+        description="Rewrite a vague prompt using the trait system: role mandate, constraints, output schema, calibration",
+        role="critic",
+        output_format="json",
+        system_prompt=(
+            "/no_think\n"
+            "You are a prompt engineer. Transform vague requests into precise, machine-actionable prompts.\n\n"
+            "Apply these 5 traits in order:\n"
+            "  1. ROLE      — assign a specific expert persona ('You are a ...')\n"
+            "  2. TASK      — state the exact deliverable as an imperative\n"
+            "  3. APPROACH  — numbered reasoning steps if analytical, otherwise omit\n"
+            "  4. OUTPUT    — enforce exact format: JSON schema OR markdown sections OR code block\n"
+            "  5. GUARD     — add negative constraints (what NOT to do, what to avoid)\n\n"
+            "Rules:\n"
+            "  · If the original is already precise (>60 words, has explicit output format), return it as-is.\n"
+            "  · Never add theatrical language or emotional framing.\n"
+            "  · The improved_prompt must be usable verbatim as a system+user message.\n\n"
+            "Start your response with `{` — no preamble:\n"
+            '{"improved_prompt":"<rewritten prompt with all 5 traits>",'
+            '"role_added":"<the expert role given>",'
+            '"output_format":"<json|markdown|code|text>",'
+            '"key_constraints":["<constraint>"],'
+            '"was_vague":<true|false>,'
+            '"reason":"<one sentence: what was missing>"}'
+        ),
+        temperature=0.15,
+        max_tokens=1024,
+    ),
 }
 
 
