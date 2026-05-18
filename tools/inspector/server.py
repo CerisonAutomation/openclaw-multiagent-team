@@ -21,7 +21,7 @@ from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel, Field
 
-from .agents import SkillResult, skill_index
+from .agents import JanClient, skill_index
 from .config import SKILL_INDEX, get_config
 from .relay import RelayAgent
 from .scheduler import Event, FileWatcher, bus, heartbeat, scheduler
@@ -33,6 +33,8 @@ from .tools import (
     run_shell,
     scan_secrets,
 )
+
+_jan = JanClient()
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
@@ -120,76 +122,33 @@ async def healthz():
 
 @app.get("/api/providers")
 async def get_providers():
-    ollama = skill_index.ollama
-    status = await ollama.status()
-    jan = await _jan_status()
+    ollama_st = await skill_index.ollama.status()
+    jan_st = await _jan.status()
+    cfg = get_config()
+    jan_info = {
+        "available": jan_st.available,
+        "base": cfg.jan_base,
+        "models": jan_st.models,
+        "error": jan_st.error,
+    }
+    active = "ollama" if ollama_st.available else ("jan" if jan_st.available else "none")
     return {
         "ollama": {
-            "available": status.available,
-            "base": get_config().ollama_base,
-            "models": status.models,
-            "error": status.error,
+            "available": ollama_st.available,
+            "base": cfg.ollama_base,
+            "models": ollama_st.models,
+            "error": ollama_st.error,
         },
-        "jan": jan,
-        "active": "ollama" if status.available else ("jan" if jan["available"] else "none"),
+        "jan": jan_info,
+        "active": active,
     }
 
 
 @app.get("/api/providers/models")
 async def list_models():
     models = await skill_index.ollama.list_models()
-    jan_models = await _jan_models()
+    jan_models = await _jan.list_models()
     return {"ollama": models, "jan": jan_models}
-
-
-async def _jan_status() -> dict[str, Any]:
-    import httpx as _httpx
-    jan_base = get_config().jan_base
-    try:
-        async with _httpx.AsyncClient(timeout=3) as c:
-            r = await c.get(f"{jan_base}/models")
-            if r.status_code == 200:
-                data = r.json()
-                names = [m["id"] for m in data.get("data", [])]
-                return {"available": True, "base": jan_base, "models": names, "error": ""}
-    except Exception as e:
-        return {"available": False, "base": jan_base, "models": [], "error": str(e)}
-    return {"available": False, "base": jan_base, "models": [], "error": "HTTP error"}
-
-
-async def _jan_models() -> list[dict]:
-    import httpx as _httpx
-    jan_base = get_config().jan_base
-    try:
-        async with _httpx.AsyncClient(timeout=3) as c:
-            r = await c.get(f"{jan_base}/models")
-            if r.status_code == 200:
-                return r.json().get("data", [])
-    except Exception:
-        pass
-    return []
-
-
-async def _jan_generate(prompt: str, system: str, model: str,
-                        temperature: float, max_tokens: int) -> str:
-    """OpenAI-compatible chat call to Jan."""
-    import httpx as _httpx
-    cfg = get_config()
-    messages = []
-    if system:
-        messages.append({"role": "system", "content": system})
-    messages.append({"role": "user", "content": prompt})
-    payload = {
-        "model": model,
-        "messages": messages,
-        "temperature": temperature,
-        "max_tokens": max_tokens,
-        "stream": False,
-    }
-    async with _httpx.AsyncClient(timeout=cfg.ollama_timeout) as c:
-        r = await c.post(f"{cfg.jan_base}/chat/completions", json=payload)
-        r.raise_for_status()
-        return r.json()["choices"][0]["message"]["content"]
 
 
 # ── Routes: code analysis ─────────────────────────────────────────────────────
@@ -262,46 +221,22 @@ class RunSkillRequest(BaseModel):
 
 @app.post("/api/skills/run")
 async def run_skill(req: RunSkillRequest):
-    provider = req.provider
-    skill_def = skill_index.get(req.skill)
-    if skill_def is None:
+    if skill_index.get(req.skill) is None:
         raise HTTPException(status_code=404, detail=f"skill not found: {req.skill}")
 
-    # Provider routing: try Ollama, fall back to Jan if needed
-    if provider == "auto":
-        st = await skill_index.ollama.status()
-        provider = "ollama" if st.available else "jan"
-
-    if provider == "jan":
-        jan_st = await _jan_status()
-        if not jan_st["available"]:
-            raise HTTPException(status_code=503, detail="Neither Ollama nor Jan is available")
-        # Pick first Jan model or use requested
-        model = req.model or (jan_st["models"][0] if jan_st["models"] else "default")
-        try:
-            raw = await _jan_generate(
-                prompt=f"{req.extra_context}\n\n{req.source}".strip() if req.extra_context else req.source,
-                system=skill_def.system_prompt,
-                model=model,
-                temperature=skill_def.temperature,
-                max_tokens=skill_def.max_tokens,
-            )
-        except Exception as e:
-            raise HTTPException(status_code=503, detail=f"Jan error: {e}")
-        from .agents import _extract_json
-        output = _extract_json(raw) if skill_def.output_format == "json" else raw.strip()
-        result = SkillResult(skill=req.skill, model_used=f"jan:{model}", output=output, raw=raw)
-    else:
-        result = await skill_index.run(req.skill, req.source, model=req.model,
-                                        extra_context=req.extra_context)
-
+    result = await skill_index.run(
+        req.skill, req.source,
+        model=req.model,
+        extra_context=req.extra_context,
+        provider=req.provider,
+    )
     if not result.ok:
         raise HTTPException(status_code=500, detail=result.error)
     return {
         "skill": result.skill,
         "model": result.model_used,
         "output": result.output,
-        "provider": provider,
+        "provider": result.provider,
     }
 
 
@@ -345,15 +280,15 @@ async def chat(req: ChatRequest):
         provider = "ollama" if st.available else "jan"
 
     if provider == "jan":
-        jan_st = await _jan_status()
-        if not jan_st["available"]:
+        jan_st = await _jan.status()
+        if not jan_st.available:
             raise HTTPException(status_code=503, detail="Jan not available")
-        model = req.model or (jan_st["models"][0] if jan_st["models"] else "default")
+        model = req.model or (jan_st.models[0] if jan_st.models else "default")
         sys_msgs = [m for m in req.messages if m.get("role") == "system"]
         system = sys_msgs[0]["content"] if sys_msgs else ""
         user_msgs = [m for m in req.messages if m.get("role") != "system"]
         prompt = user_msgs[-1]["content"] if user_msgs else ""
-        content = await _jan_generate(prompt, system, model, req.temperature, req.max_tokens)
+        content = await _jan.generate(prompt, model, system, req.temperature, req.max_tokens)
         return {"content": content, "model": f"jan:{model}", "provider": "jan"}
 
     content = await skill_index.ollama.chat(

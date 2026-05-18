@@ -10,8 +10,6 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
-from typing import Any, Callable
-
 from openclaw.audit import AuditLog
 from openclaw.providers import Provider
 from openclaw import prompts

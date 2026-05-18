@@ -1,4 +1,4 @@
-"""Skill index, Ollama client, and agent runners."""
+"""Skill index, Ollama client, Jan client, and agent runners."""
 from __future__ import annotations
 
 import json
@@ -82,18 +82,6 @@ class OllamaClient:
             return sorted(available, key=len, reverse=True)[0]
         return self._cfg.default_model
 
-    async def pick_jan_model(self) -> str | None:
-        """Return the first available Jan model, or None if Jan is not running."""
-        try:
-            async with httpx.AsyncClient(timeout=3) as c:
-                r = await c.get("http://localhost:1337/v1/models")
-                if r.status_code == 200:
-                    data = r.json().get("data", [])
-                    return data[0]["id"] if data else None
-        except Exception:
-            pass
-        return None
-
     async def generate(
         self,
         prompt: str,
@@ -138,6 +126,71 @@ class OllamaClient:
             r = await c.post(f"{self.base}/api/chat", json=payload)
             r.raise_for_status()
             return r.json().get("message", {}).get("content", "")
+
+
+# ── Jan client (OpenAI-compatible fallback) ───────────────────────────────────
+
+@dataclass
+class JanStatus:
+    available: bool
+    models: list[str] = field(default_factory=list)
+    error: str = ""
+
+
+class JanClient:
+    """Thin client for Jan's OpenAI-compatible API at :1337/v1."""
+
+    def __init__(self) -> None:
+        self._cfg = get_config()
+
+    @property
+    def base(self) -> str:
+        return self._cfg.jan_base
+
+    async def status(self) -> JanStatus:
+        try:
+            async with httpx.AsyncClient(timeout=3) as c:
+                r = await c.get(f"{self.base}/models")
+                if r.status_code == 200:
+                    names = [m["id"] for m in r.json().get("data", [])]
+                    return JanStatus(available=True, models=names)
+                return JanStatus(available=False, error=f"HTTP {r.status_code}")
+        except Exception as e:
+            return JanStatus(available=False, error=str(e))
+
+    async def list_models(self) -> list[dict[str, Any]]:
+        try:
+            async with httpx.AsyncClient(timeout=3) as c:
+                r = await c.get(f"{self.base}/models")
+                if r.status_code == 200:
+                    return r.json().get("data", [])
+        except Exception:
+            pass
+        return []
+
+    async def generate(
+        self,
+        prompt: str,
+        model: str,
+        system: str = "",
+        temperature: float = 0.2,
+        max_tokens: int = 2048,
+    ) -> str:
+        messages: list[dict[str, str]] = []
+        if system:
+            messages.append({"role": "system", "content": system})
+        messages.append({"role": "user", "content": prompt})
+        payload: dict[str, Any] = {
+            "model": model,
+            "messages": messages,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+            "stream": False,
+        }
+        async with httpx.AsyncClient(timeout=self._cfg.ollama_timeout) as c:
+            r = await c.post(f"{self.base}/chat/completions", json=payload)
+            r.raise_for_status()
+            return r.json()["choices"][0]["message"]["content"]
 
 
 # ── JSON extractor ────────────────────────────────────────────────────────────
@@ -188,10 +241,11 @@ class SkillResult:
 
 
 class SkillIndex:
-    """Registry that maps skill names → SkillDef and runs them via Ollama."""
+    """Registry that maps skill names → SkillDef and runs them via Ollama (Jan fallback)."""
 
     def __init__(self) -> None:
         self._ollama = OllamaClient()
+        self._jan = JanClient()
         self._extra: dict[str, SkillDef] = {}
 
     def register(self, skill: SkillDef) -> None:
@@ -212,23 +266,69 @@ class SkillIndex:
     def get(self, name: str) -> SkillDef | None:
         return SKILL_INDEX.get(name) or self._extra.get(name)
 
+    async def _pick_provider(self) -> tuple[str, str]:
+        """Return (provider_name, first_available_model). Ollama preferred over Jan."""
+        ollama_st = await self._ollama.status()
+        if ollama_st.available:
+            return "ollama", ""
+        jan_st = await self._jan.status()
+        if jan_st.available:
+            first = jan_st.models[0] if jan_st.models else "default"
+            return "jan", first
+        return "none", ""
+
     async def run(
         self,
         skill_name: str,
         input_text: str,
         model: str | None = None,
         extra_context: str = "",
+        provider: str = "auto",
     ) -> SkillResult:
         skill = self.get(skill_name)
         if skill is None:
             return SkillResult(skill=skill_name, model_used="", output=None, raw="",
                                ok=False, error=f"skill not found: {skill_name!r}")
 
-        chosen_model = model or await self._ollama.pick_model_async(skill.role)
         prompt = input_text
         if extra_context:
             prompt = f"{extra_context}\n\n---\n\n{input_text}"
 
+        # Resolve provider
+        active_provider = provider
+        jan_model = ""
+        if provider == "auto":
+            active_provider, jan_model = await self._pick_provider()
+
+        if active_provider == "jan":
+            chosen_model = model or jan_model or "default"
+            try:
+                raw = await self._jan.generate(
+                    prompt=prompt,
+                    model=chosen_model,
+                    system=skill.system_prompt,
+                    temperature=skill.temperature,
+                    max_tokens=skill.max_tokens,
+                )
+            except Exception as e:
+                return SkillResult(skill=skill_name, model_used=f"jan:{chosen_model}",
+                                   output=None, raw="", ok=False, error=str(e),
+                                   provider="jan")
+            if skill.output_format == "json":
+                parsed = _extract_json(raw)
+                return SkillResult(skill=skill_name, model_used=f"jan:{chosen_model}",
+                                   output=parsed, raw=raw,
+                                   ok="_parse_error" not in parsed, provider="jan")
+            return SkillResult(skill=skill_name, model_used=f"jan:{chosen_model}",
+                               output=raw.strip(), raw=raw, ok=True, provider="jan")
+
+        if active_provider == "none":
+            return SkillResult(skill=skill_name, model_used="", output=None, raw="",
+                               ok=False, error="no LLM provider available (Ollama and Jan both offline)",
+                               provider="none")
+
+        # Ollama path
+        chosen_model = model or await self._ollama.pick_model_async(skill.role)
         try:
             raw = await self._ollama.generate(
                 prompt=prompt,
@@ -240,14 +340,15 @@ class SkillIndex:
             )
         except Exception as e:
             return SkillResult(skill=skill_name, model_used=chosen_model, output=None,
-                               raw="", ok=False, error=str(e))
+                               raw="", ok=False, error=str(e), provider="ollama")
 
         if skill.output_format == "json":
             parsed = _extract_json(raw)
             return SkillResult(skill=skill_name, model_used=chosen_model,
-                               output=parsed, raw=raw, ok="_parse_error" not in parsed)
+                               output=parsed, raw=raw,
+                               ok="_parse_error" not in parsed, provider="ollama")
         return SkillResult(skill=skill_name, model_used=chosen_model,
-                           output=raw.strip(), raw=raw, ok=True)
+                           output=raw.strip(), raw=raw, ok=True, provider="ollama")
 
     async def run_pipeline(
         self,
@@ -264,6 +365,10 @@ class SkillIndex:
     @property
     def ollama(self) -> OllamaClient:
         return self._ollama
+
+    @property
+    def jan(self) -> JanClient:
+        return self._jan
 
 
 # Module-level singleton

@@ -135,9 +135,30 @@ PRESETS: dict[str, ProviderPreset] = {
         kind="openai_compatible",
         key_env="OLLAMA_API_KEY",        # ollama doesn't need a key; any non-empty value works
         base_url="http://localhost:11434/v1",
-        default_model="llama3.1:latest",
-        description="Ollama — local models, no cost, no network.",
+        default_model="mistral:latest",  # fastest installed model for cheap roles
+        role_models={
+            # deepseek-r1:8b leads on reasoning: architect, critic, fixer (CoT)
+            "architect": "deepseek-r1:8b",
+            "critic":    "deepseek-r1:8b",
+            "fixer":     "deepseek-r1:8b",
+            # qwen2.5-coder:7b is the code specialist
+            "coder":     "qwen2.5-coder:7b",
+            "reviewer":  "qwen2.5-coder:7b",
+            "tester":    "qwen2.5-coder:7b",
+            # mistral:latest is fastest — use for routing and cheap classification
+            "intent":    "mistral:latest",
+            "deployer":  "mistral:latest",
+        },
+        description="Ollama — local models, no cost, no network. (mistral/deepseek-r1/qwen2.5-coder/qwen3/llama3)",
         docs_url="https://github.com/ollama/ollama",
+    ),
+    "jan": ProviderPreset(
+        kind="openai_compatible",
+        key_env="",                      # Jan doesn't require an API key
+        base_url="http://localhost:1337/v1",
+        default_model="mistral-ins-7b-q4",  # typical Jan default; overridden at runtime
+        description="Jan — local OpenAI-compatible server, fallback when Ollama is offline.",
+        docs_url="https://jan.ai/docs",
     ),
     "mock": ProviderPreset(
         kind="mock",
