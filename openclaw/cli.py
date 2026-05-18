@@ -227,6 +227,11 @@ def _serve_cmd(args: argparse.Namespace) -> int:
     return 0
 
 
+def _tui_cmd(args: argparse.Namespace) -> int:  # noqa: ARG001
+    from openclaw.tui import main as tui_main
+    return tui_main()
+
+
 # ── helpers ──────────────────────────────────────────────────────────────────
 
 def _resolve_task(args: argparse.Namespace) -> str:
@@ -285,7 +290,7 @@ def build_parser() -> argparse.ArgumentParser:
         description="Autonomous multi-agent app builder — drop in a prompt or a repo.",
     )
     p.add_argument("--version", action="version", version=f"openclaw {__version__}")
-    sub = p.add_subparsers(dest="cmd", required=True)
+    sub = p.add_subparsers(dest="cmd", required=False)  # no args → TUI
 
     # auto — zero-effort entry point
     au = sub.add_parser("auto", help="Detect intent from cwd and run (reads .openclaw.toml)")
@@ -338,12 +343,20 @@ def build_parser() -> argparse.ArgumentParser:
     pv = sub.add_parser("providers", help="List available LLM provider presets and their models")
     pv.set_defaults(func=_providers_cmd)
 
+    # tui — interactive relay chat (default when no subcommand given)
+    tu = sub.add_parser("tui", help="Start interactive TUI (default with no args)")
+    tu.set_defaults(func=_tui_cmd)
+
     return p
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+    # No subcommand → launch TUI
+    if not args.cmd:
+        from openclaw.tui import main as tui_main
+        return tui_main()
     return args.func(args)
 
 

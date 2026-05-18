@@ -29,7 +29,6 @@ from openclaw.tools import (
     analyze_repo,
     ensure_workspace,
     generate_image,
-    read_file,
     run_shell,
     vercel_cli_available,
     vercel_deploy,

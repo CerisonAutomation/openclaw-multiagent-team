@@ -1,0 +1,739 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>openclaw inspector</title>
+<style>
+  :root {
+    --bg: #0d1117; --panel: #161b22; --panel2: #1c2128; --border: #30363d;
+    --fg: #e6edf3; --muted: #8b949e; --accent: #58a6ff; --ok: #3fb950;
+    --warn: #d29922; --bad: #f85149; --purple: #bc8cff; --teal: #39d353;
+    --mono: ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+  }
+  * { box-sizing:border-box; margin:0; padding:0; }
+  html, body { height:100%; background:var(--bg); color:var(--fg);
+    font:13px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
+
+  /* ── layout ── */
+  #layout { display:grid; grid-template-rows:auto 1fr; height:100%; }
+  header { display:flex; align-items:center; gap:12px; padding:10px 16px;
+    border-bottom:1px solid var(--border); background:var(--panel); }
+  header h1 { font-size:15px; font-weight:600; }
+  header .badge { font-size:11px; padding:2px 8px; border-radius:999px;
+    border:1px solid var(--border); color:var(--muted); }
+  header .spacer { flex:1; }
+  #ws-dot { width:8px; height:8px; border-radius:50%; background:var(--bad);
+    display:inline-block; transition:background .3s; }
+  #ws-dot.ok { background:var(--ok); }
+  #ws-label { font-size:11px; color:var(--muted); }
+
+  #body { display:grid; grid-template-columns:1fr 360px; min-height:0; }
+
+  /* ── left: input pane ── */
+  #left { display:flex; flex-direction:column; border-right:1px solid var(--border); }
+  #src-toolbar { display:flex; gap:8px; padding:8px 12px; border-bottom:1px solid var(--border);
+    align-items:center; background:var(--panel2); }
+  #src-toolbar label { font-size:11px; color:var(--muted); }
+  #src-toolbar select, #src-toolbar input { background:var(--panel); color:var(--fg);
+    border:1px solid var(--border); border-radius:4px; padding:3px 6px; font-size:12px; }
+  #drop-zone { margin:8px 12px; padding:8px 12px; border:1px dashed var(--border);
+    border-radius:4px; color:var(--muted); font-size:11px; cursor:pointer; }
+  #drop-zone.over { border-color:var(--accent); color:var(--accent); }
+  textarea#src { flex:1; width:100%; resize:none; background:var(--bg); color:var(--fg);
+    border:0; padding:14px 16px; font:13px/1.55 var(--mono); outline:none; }
+
+  /* ── right: results pane ── */
+  #right { display:flex; flex-direction:column; min-width:0; overflow:hidden; }
+  .tabs { display:flex; border-bottom:1px solid var(--border); background:var(--panel2); overflow-x:auto; }
+  .tabs button { background:0; border:0; color:var(--muted); padding:9px 14px;
+    font-size:12px; cursor:pointer; border-bottom:2px solid transparent; white-space:nowrap; }
+  .tabs button.active { color:var(--fg); border-bottom-color:var(--accent); }
+  .tab-body { flex:1; overflow-y:auto; padding:14px 16px; display:none; }
+  .tab-body.active { display:block; }
+
+  /* ── components ── */
+  .btn { background:var(--panel2); color:var(--fg); border:1px solid var(--border);
+    padding:5px 10px; border-radius:4px; cursor:pointer; font-size:12px; }
+  .btn:hover { border-color:var(--accent); }
+  .btn.primary { background:var(--accent); color:#000; border-color:var(--accent); font-weight:600; }
+  .btn.primary:hover { filter:brightness(1.1); }
+  .btn.danger { background:var(--bad); color:#fff; border-color:var(--bad); }
+
+  .card { background:var(--panel2); border:1px solid var(--border); border-radius:6px; padding:10px 12px; }
+  .card .k { font-size:10px; text-transform:uppercase; letter-spacing:.05em; color:var(--muted); }
+  .card .v { font-size:20px; font-weight:700; margin-top:2px; }
+  .ok-v { color:var(--ok); } .warn-v { color:var(--warn); } .bad-v { color:var(--bad); }
+
+  .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+  .grid3 { display:grid; grid-template-columns:1fr 1fr 1fr; gap:8px; }
+  .grid4 { display:grid; grid-template-columns:1fr 1fr 1fr 1fr; gap:8px; }
+
+  .bar { height:4px; background:var(--panel); border-radius:2px; overflow:hidden; margin-top:4px; }
+  .bar > div { height:100%; background:var(--accent); }
+
+  pre.code { background:var(--panel2); border:1px solid var(--border); border-radius:4px;
+    padding:10px; font:12px/1.45 var(--mono); overflow-x:auto; white-space:pre-wrap; }
+  .pill { display:inline-block; padding:2px 7px; border-radius:999px; font-size:11px;
+    border:1px solid var(--border); color:var(--muted); margin:2px 2px 2px 0; }
+  .pill.ok { color:var(--ok); border-color:var(--ok); }
+  .pill.warn { color:var(--warn); border-color:var(--warn); }
+  .pill.bad { color:var(--bad); border-color:var(--bad); }
+  .pill.purple { color:var(--purple); border-color:var(--purple); }
+
+  .check { display:flex; gap:10px; margin-bottom:6px; padding:8px 10px;
+    border:1px solid var(--border); border-radius:4px; align-items:flex-start; }
+  .check .mark { font:700 11px/1 var(--mono); padding:2px 6px; border-radius:3px; flex-shrink:0; }
+  .mark.ok { background:rgba(63,185,80,.15); color:var(--ok); }
+  .mark.warn { background:rgba(210,153,34,.15); color:var(--warn); }
+  .mark.bad { background:rgba(248,81,73,.15); color:var(--bad); }
+  .check .label { font-weight:600; font-size:12px; }
+  .check .detail { color:var(--muted); font-size:11px; margin-top:2px; }
+
+  h3 { font-size:11px; text-transform:uppercase; letter-spacing:.05em;
+    color:var(--muted); margin:14px 0 6px; }
+  .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:8px; }
+  .placeholder { color:var(--muted); padding:40px 20px; text-align:center; font-size:12px; }
+  .muted { color:var(--muted); }
+
+  /* chat */
+  #chat-log { display:flex; flex-direction:column; gap:8px; max-height:300px; overflow-y:auto;
+    margin-bottom:10px; }
+  .msg { padding:8px 10px; border-radius:6px; font-size:12px; max-width:90%; }
+  .msg.user { background:var(--accent); color:#000; align-self:flex-end; }
+  .msg.assistant { background:var(--panel2); border:1px solid var(--border); align-self:flex-start; }
+  #chat-input { width:100%; background:var(--panel2); color:var(--fg); border:1px solid var(--border);
+    border-radius:4px; padding:6px 8px; font:12px/1.4 var(--mono); resize:none; height:60px; }
+
+  /* providers */
+  .provider-card { display:flex; align-items:center; gap:10px; padding:10px 12px;
+    border:1px solid var(--border); border-radius:6px; margin-bottom:8px; }
+  .provider-card .dot { width:10px; height:10px; border-radius:50%; flex-shrink:0; }
+  .provider-card .name { font-weight:600; font-size:13px; }
+  .provider-card .models { color:var(--muted); font-size:11px; }
+
+  /* scheduler */
+  .job { padding:8px 10px; border:1px solid var(--border); border-radius:4px; margin-bottom:6px; }
+  .job .jname { font-weight:600; font-size:12px; }
+  .job .jmeta { font-size:11px; color:var(--muted); margin-top:2px; }
+
+  /* log */
+  #event-log { font:11px/1.45 var(--mono); color:var(--teal); max-height:100%;
+    overflow-y:auto; white-space:pre-wrap; }
+  .log-line { border-bottom:1px solid rgba(255,255,255,.03); padding:2px 0; }
+</style>
+</head>
+<body>
+<div id="layout">
+
+<header>
+  <h1>openclaw inspector</h1>
+  <span class="badge">autodetect · agents · cron · real-time</span>
+  <div class="spacer"></div>
+  <span id="ws-dot"></span>
+  <span id="ws-label">connecting…</span>
+  &nbsp;
+  <button class="btn" id="loadSample">sample</button>
+  <button class="btn" id="clearBtn">clear</button>
+  <button class="btn primary" id="analyzeBtn">▶ Analyze</button>
+</header>
+
+<div id="body">
+
+  <!-- INPUT -->
+  <div id="left">
+    <div id="src-toolbar">
+      <label>Language:</label>
+      <select id="langSel">
+        <option value="">auto-detect</option>
+        <option>python</option><option>typescript</option><option>javascript</option>
+        <option>json</option><option>html</option><option>css</option>
+        <option>yaml</option><option>shell</option><option>sql</option>
+      </select>
+      &nbsp;
+      <label>Model:</label>
+      <select id="modelSel"><option value="">auto</option></select>
+      &nbsp;
+      <label>Provider:</label>
+      <select id="providerSel">
+        <option value="auto">auto</option>
+        <option value="ollama">Ollama</option>
+        <option value="jan">Jan</option>
+      </select>
+    </div>
+    <div id="drop-zone">Drop a file here or paste code below</div>
+    <textarea id="src" spellcheck="false" placeholder="// paste any code here — analysis starts automatically"></textarea>
+  </div>
+
+  <!-- RESULTS -->
+  <div id="right">
+    <div class="tabs">
+      <button class="tab active" data-tab="report">Report</button>
+      <button class="tab" data-tab="metrics">Metrics</button>
+      <button class="tab" data-tab="skills">Skills</button>
+      <button class="tab" data-tab="chat">Chat</button>
+      <button class="tab" data-tab="schedule">Cron</button>
+      <button class="tab" data-tab="providers">Providers</button>
+      <button class="tab" data-tab="events">Events</button>
+    </div>
+
+    <!-- Report -->
+    <div class="tab-body active" id="tab-report">
+      <div class="placeholder">Paste code and click Analyze (or wait for auto-analyze)</div>
+    </div>
+
+    <!-- Metrics -->
+    <div class="tab-body" id="tab-metrics">
+      <div class="placeholder">Run analyze to see metrics</div>
+    </div>
+
+    <!-- Skills -->
+    <div class="tab-body" id="tab-skills">
+      <div id="skills-list"></div>
+      <div id="skill-result" style="margin-top:12px"></div>
+    </div>
+
+    <!-- Chat -->
+    <div class="tab-body" id="tab-chat">
+      <div id="chat-log"></div>
+      <textarea id="chat-input" placeholder="Ask about the code in the editor…"></textarea>
+      <div class="row" style="margin-top:6px">
+        <button class="btn primary" id="chatSend">Send</button>
+        <button class="btn" id="chatClear">Clear</button>
+      </div>
+    </div>
+
+    <!-- Schedule -->
+    <div class="tab-body" id="tab-schedule">
+      <h3>Add scheduled skill</h3>
+      <div class="row">
+        <input id="jobName" placeholder="job name" style="background:var(--panel2);color:var(--fg);border:1px solid var(--border);border-radius:4px;padding:4px 8px;font-size:12px;width:100px">
+        <select id="jobSkill" style="background:var(--panel2);color:var(--fg);border:1px solid var(--border);border-radius:4px;padding:4px 6px;font-size:12px"></select>
+        <input id="jobInterval" type="number" value="300" min="10" style="width:70px;background:var(--panel2);color:var(--fg);border:1px solid var(--border);border-radius:4px;padding:4px 8px;font-size:12px">
+        <span class="muted" style="font-size:11px">s</span>
+        <button class="btn primary" id="addJob">Add</button>
+      </div>
+      <h3>Active jobs</h3>
+      <div id="jobs-list"><div class="placeholder">No scheduled jobs</div></div>
+    </div>
+
+    <!-- Providers -->
+    <div class="tab-body" id="tab-providers">
+      <div id="providers-panel"><div class="placeholder">Loading provider status…</div></div>
+    </div>
+
+    <!-- Events -->
+    <div class="tab-body" id="tab-events">
+      <div class="row" style="margin-bottom:8px">
+        <span class="muted" style="font-size:11px">Live WebSocket events</span>
+        <button class="btn" id="clearLog" style="margin-left:auto">Clear</button>
+      </div>
+      <div id="event-log"></div>
+    </div>
+  </div>
+</div>
+</div>
+
+<script>
+"use strict";
+const API = "http://localhost:8765";
+const WS  = "ws://localhost:8765/ws";
+
+// ── State ──────────────────────────────────────────────────────────────────
+
+let ws = null;
+let lastReport = null;
+let analyzeTimer = null;
+let chatHistory = [];
+
+// ── WebSocket ──────────────────────────────────────────────────────────────
+
+function connectWS() {
+  if (ws && ws.readyState < 2) return;
+  ws = new WebSocket(WS);
+  const dot = document.getElementById("ws-dot");
+  const lbl = document.getElementById("ws-label");
+  ws.onopen = () => {
+    dot.className = "ok"; lbl.textContent = "live";
+    ws.send(JSON.stringify({type:"ping"}));
+    loadProviders(); loadSkillList(); loadJobs();
+  };
+  ws.onclose = () => {
+    dot.className = ""; lbl.textContent = "disconnected";
+    setTimeout(connectWS, 3000);
+  };
+  ws.onerror = () => { dot.className = ""; lbl.textContent = "error"; };
+  ws.onmessage = (e) => {
+    const msg = JSON.parse(e.data);
+    logEvent(msg);
+    if (msg.event === "heartbeat") updateHeartbeat(msg);
+    if (msg.event === "scheduled_result") appendSkillResult(msg);
+  };
+}
+
+function logEvent(msg) {
+  const log = document.getElementById("event-log");
+  const t = new Date().toISOString().split("T")[1].split(".")[0];
+  const line = document.createElement("div");
+  line.className = "log-line";
+  line.textContent = `[${t}] ${JSON.stringify(msg)}`;
+  log.appendChild(line);
+  log.scrollTop = log.scrollHeight;
+}
+
+// ── Tabs ───────────────────────────────────────────────────────────────────
+
+document.querySelectorAll(".tab").forEach(btn => {
+  btn.addEventListener("click", () => {
+    document.querySelectorAll(".tab").forEach(b => b.classList.remove("active"));
+    document.querySelectorAll(".tab-body").forEach(t => t.classList.remove("active"));
+    btn.classList.add("active");
+    document.getElementById("tab-" + btn.dataset.tab).classList.add("active");
+  });
+});
+
+// ── Analyze ────────────────────────────────────────────────────────────────
+
+async function analyze(skipAgents) {
+  const src = document.getElementById("src").value;
+  if (!src.trim()) return;
+  const lang = document.getElementById("langSel").value;
+  try {
+    const r = await fetch(`${API}/api/analyze/code`, {
+      method: "POST", headers: {"Content-Type":"application/json"},
+      body: JSON.stringify({source: src, language: lang}),
+    });
+    if (!r.ok) return;
+    const data = await r.json();
+    renderReport(data);
+    renderMetrics(data);
+  } catch(e) {
+    document.getElementById("tab-report").innerHTML =
+      `<div class="placeholder bad-v">Server not running? Start it first:<br><br><code>python -m tools.inspector.server</code></div>`;
+  }
+}
+
+document.getElementById("analyzeBtn").addEventListener("click", () => analyze(false));
+document.getElementById("src").addEventListener("input", () => {
+  clearTimeout(analyzeTimer);
+  analyzeTimer = setTimeout(() => analyze(true), 600);
+});
+
+// ── Report rendering ───────────────────────────────────────────────────────
+
+function renderReport(data) {
+  const lang = data.language || "?";
+  const m = data.metrics || {};
+  const secrets = data.secrets || [];
+  const lint = data.lint || null;
+  const sha = m.sha256 || "";
+
+  // simple checks mirrored from tools.py
+  const checks = [];
+  const add = (status, label, detail) => checks.push({status, label, detail});
+  if (lint) {
+    const n = lint.issue_count || 0;
+    add(n === 0 ? "ok" : (n < 5 ? "warn" : "bad"), `ruff: ${n} issue(s)`,
+        n === 0 ? "clean" : lint.issues?.slice(0,2).map(i => `L${i.line} ${i.code}: ${i.message}`).join("; ") || "");
+  }
+  add((m.longest_line||0) <= 120 ? "ok" : "warn", "line length ≤ 120",
+      `longest: ${m.longest_line} chars`);
+  add((m.todo_markers||0) === 0 ? "ok" : "warn", "no TODO/FIXME",
+      (m.todo_markers||0) === 0 ? "none" : `${m.todo_markers} marker(s)`);
+  add(secrets.length === 0 ? "ok" : "bad", "no secrets",
+      secrets.length === 0 ? "none" : `${secrets.length} potential leak(s)`);
+  if ((m.lines_code||0) > 20) {
+    const cr = m.comment_ratio || 0;
+    add(cr >= 0.02 && cr <= 0.4 ? "ok" : "warn", "comment ratio",
+        `${(cr*100).toFixed(1)}% ${cr < 0.02 ? "(low)" : cr > 0.4 ? "(high)" : ""}`);
+  }
+
+  const okN = checks.filter(c=>c.status==="ok").length;
+  const warnN = checks.filter(c=>c.status==="warn").length;
+  const badN = checks.filter(c=>c.status==="bad").length;
+  const scoreRaw = (okN + warnN*0.5) / (checks.length||1);
+  const score = (scoreRaw * 10).toFixed(1);
+  const scoreClass = score >= 8 ? "ok-v" : score >= 6 ? "warn-v" : "bad-v";
+
+  const el = document.getElementById("tab-report");
+  el.innerHTML = `
+    <div class="grid4" style="margin-bottom:12px">
+      <div class="card"><div class="k">score</div>
+        <div class="v ${scoreClass}">${score}<span style="font-size:13px;color:var(--muted)">/10</span></div></div>
+      <div class="card"><div class="k">language</div><div class="v">${h(lang)}</div></div>
+      <div class="card"><div class="k">lines</div><div class="v">${m.lines_total||0}</div></div>
+      <div class="card"><div class="k">bytes</div><div class="v">${m.bytes||0}</div></div>
+    </div>
+    <div class="row">
+      <span class="pill ok">${okN} pass</span>
+      <span class="pill warn">${warnN} warn</span>
+      <span class="pill bad">${badN} fail</span>
+    </div>
+    ${checks.map(c => `
+      <div class="check">
+        <span class="mark ${c.status}">${c.status.toUpperCase()}</span>
+        <div><div class="label">${h(c.label)}</div><div class="detail">${h(c.detail)}</div></div>
+      </div>`).join("")}
+    ${secrets.length ? `
+      <h3>secrets detected</h3>
+      ${secrets.map(s => `<div class="check">
+        <span class="mark bad">SECRET</span>
+        <div><div class="label">${h(s.pattern)} — line ${s.line}</div>
+          <div class="detail">${h(s.snippet)}</div></div></div>`).join("")}
+    ` : ""}
+    ${lint && lint.issues?.length ? `
+      <h3>lint issues (ruff)</h3>
+      <pre class="code">${lint.issues.slice(0,20).map(i=>`L${i.line}:${i.col} ${i.code}  ${h(i.message)}`).join("\n")}</pre>
+    ` : ""}
+    <h3>sha-256</h3>
+    <pre class="code" style="font-size:10px">${sha}</pre>
+  `;
+  lastReport = {lang, metrics: m, secrets, lint, checks, score};
+}
+
+function renderMetrics(data) {
+  const m = data.metrics || {};
+  const ast = m.ast;
+  const el = document.getElementById("tab-metrics");
+  const cards = [
+    ["bytes", m.bytes], ["lines total", m.lines_total], ["lines code", m.lines_code],
+    ["lines comment", m.lines_comment], ["comment %", ((m.comment_ratio||0)*100).toFixed(1)+"%"],
+    ["functions", m.function_count], ["branches", m.branch_keywords],
+    ["cyclomatic avg", m.cyclomatic_avg], ["longest line", m.longest_line],
+    ["avg line", m.avg_line_length], ["TODOs", m.todo_markers],
+  ];
+  el.innerHTML = `
+    <div class="grid3" style="margin-bottom:12px">
+      ${cards.map(([k,v]) => `<div class="card"><div class="k">${h(k)}</div><div class="v">${h(String(v??"-"))}</div></div>`).join("")}
+    </div>
+    ${ast ? `
+      <h3>Python AST</h3>
+      <div class="grid2">
+        <div class="card"><div class="k">functions</div><div class="v">${ast.functions.length}</div>
+          <div class="muted" style="font-size:10px">${ast.functions.join(", ")||"-"}</div></div>
+        <div class="card"><div class="k">classes</div><div class="v">${ast.classes.length}</div>
+          <div class="muted" style="font-size:10px">${ast.classes.join(", ")||"-"}</div></div>
+        <div class="card"><div class="k">async fns</div><div class="v">${ast.async_functions.length}</div></div>
+        <div class="card"><div class="k">cyclomatic</div><div class="v">${ast.cyclomatic_complexity}</div></div>
+      </div>
+      ${ast.imports.length ? `<h3>imports (${ast.imports.length})</h3><div>${ast.imports.map(i=>`<span class="pill">${h(i)}</span>`).join("")}</div>` : ""}
+      ${ast.parse_error ? `<h3>parse error</h3><pre class="code bad-v">${h(ast.parse_error)}</pre>` : ""}
+    ` : ""}
+  `;
+}
+
+// ── Skills tab ─────────────────────────────────────────────────────────────
+
+async function loadSkillList() {
+  try {
+    const r = await fetch(`${API}/api/skills`);
+    const d = await r.json();
+    const skills = d.skills || [];
+    const el = document.getElementById("skills-list");
+    el.innerHTML = `<h3>available skills (${skills.length})</h3>
+      <div class="row" style="flex-wrap:wrap">
+        ${skills.map(s => `
+          <div style="width:100%">
+            <div class="row">
+              <button class="btn" onclick="runSkill('${s.name}')">${s.name}</button>
+              <span class="muted" style="font-size:11px">${h(s.description)}</span>
+              <span class="pill purple">${s.role}</span>
+              <span class="pill">${s.output_format}</span>
+            </div>
+          </div>`).join("")}
+      </div>`;
+
+    // Populate scheduler skill selector
+    const jobSkill = document.getElementById("jobSkill");
+    jobSkill.innerHTML = skills.map(s => `<option>${s.name}</option>`).join("");
+  } catch(e) {}
+}
+
+async function runSkill(name) {
+  const src = document.getElementById("src").value;
+  if (!src.trim()) { alert("Paste some code first."); return; }
+  const model = document.getElementById("modelSel").value;
+  const provider = document.getElementById("providerSel").value;
+  const el = document.getElementById("skill-result");
+  el.innerHTML = `<div class="muted" style="font-size:12px">Running ${name}…</div>`;
+  activateTab("skills");
+  try {
+    const r = await fetch(`${API}/api/skills/run`, {
+      method:"POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({skill: name, source: src, model: model||null, provider}),
+    });
+    const d = await r.json();
+    if (!r.ok) { el.innerHTML = `<pre class="code bad-v">${h(d.detail||JSON.stringify(d))}</pre>`; return; }
+    const out = d.output;
+    el.innerHTML = `
+      <h3>${name} — model: ${h(d.model)} via ${h(d.provider)}</h3>
+      ${typeof out === "object"
+        ? `<pre class="code">${h(JSON.stringify(out, null, 2))}</pre>`
+        : `<pre class="code">${h(String(out))}</pre>`}
+    `;
+  } catch(e) { el.innerHTML = `<pre class="code bad-v">${h(String(e))}</pre>`; }
+}
+
+function appendSkillResult(msg) {
+  const el = document.getElementById("skill-result");
+  el.innerHTML = `<h3>Scheduled: ${h(msg.job)} / ${h(msg.skill)}</h3>
+    <pre class="code">${h(JSON.stringify(msg.output, null, 2))}</pre>` + el.innerHTML;
+}
+
+// ── Chat ───────────────────────────────────────────────────────────────────
+
+function appendMsg(role, text) {
+  const log = document.getElementById("chat-log");
+  const d = document.createElement("div");
+  d.className = "msg " + role;
+  d.textContent = text;
+  log.appendChild(d);
+  log.scrollTop = log.scrollHeight;
+}
+
+async function sendChat() {
+  const inp = document.getElementById("chat-input");
+  const text = inp.value.trim();
+  if (!text) return;
+  inp.value = "";
+  const src = document.getElementById("src").value;
+  appendMsg("user", text);
+
+  const system = src
+    ? `You are a code assistant. The user is working with the following code:\n\n${src.slice(0, 3000)}`
+    : "You are a helpful code assistant.";
+
+  chatHistory.push({role:"user", content: text});
+  const msgs = [{role:"system", content: system}, ...chatHistory.slice(-10)];
+  const model = document.getElementById("modelSel").value;
+  const provider = document.getElementById("providerSel").value;
+
+  try {
+    const r = await fetch(`${API}/api/chat`, {
+      method:"POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({messages: msgs, model: model||null, provider, temperature:0.4}),
+    });
+    const d = await r.json();
+    const reply = d.content || d.error || "(no response)";
+    appendMsg("assistant", reply);
+    chatHistory.push({role:"assistant", content: reply});
+  } catch(e) { appendMsg("assistant", `Error: ${e}`); }
+}
+
+document.getElementById("chatSend").addEventListener("click", sendChat);
+document.getElementById("chat-input").addEventListener("keydown", e => {
+  if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) sendChat();
+});
+document.getElementById("chatClear").addEventListener("click", () => {
+  chatHistory = [];
+  document.getElementById("chat-log").innerHTML = "";
+});
+
+// ── Schedule ───────────────────────────────────────────────────────────────
+
+async function loadJobs() {
+  try {
+    const r = await fetch(`${API}/api/schedule`);
+    const d = await r.json();
+    const el = document.getElementById("jobs-list");
+    const jobs = d.jobs || [];
+    if (!jobs.length) { el.innerHTML = '<div class="placeholder">No scheduled jobs</div>'; return; }
+    el.innerHTML = jobs.map(j => `
+      <div class="job">
+        <div class="row">
+          <span class="jname">${h(j.name)}</span>
+          <span class="pill">${j.interval_s}s</span>
+          <span class="pill ok">runs: ${j.run_count}</span>
+          <button class="btn danger" onclick="removeJob('${j.name}')" style="margin-left:auto;padding:2px 8px">×</button>
+        </div>
+        <div class="jmeta">next in ${Math.round(j.next_run_in_s)}s
+          ${j.last_error ? `| <span class="bad-v">err: ${h(j.last_error)}</span>` : ""}
+        </div>
+      </div>`).join("");
+  } catch(e) {}
+}
+
+document.getElementById("addJob").addEventListener("click", async () => {
+  const name = document.getElementById("jobName").value.trim();
+  const skill = document.getElementById("jobSkill").value;
+  const interval = parseInt(document.getElementById("jobInterval").value);
+  const src = document.getElementById("src").value;
+  if (!name || !src.trim()) { alert("Give the job a name and paste some code."); return; }
+  await fetch(`${API}/api/schedule/add`, {
+    method:"POST", headers:{"Content-Type":"application/json"},
+    body: JSON.stringify({name, skill, source: src, interval_s: interval}),
+  });
+  loadJobs();
+});
+
+async function removeJob(name) {
+  await fetch(`${API}/api/schedule/${encodeURIComponent(name)}`, {method:"DELETE"});
+  loadJobs();
+}
+
+// Auto-refresh job list
+setInterval(loadJobs, 10000);
+
+// ── Providers ──────────────────────────────────────────────────────────────
+
+async function loadProviders() {
+  try {
+    const r = await fetch(`${API}/api/providers`);
+    const d = await r.json();
+    const el = document.getElementById("providers-panel");
+
+    // Populate model selector
+    const modelSel = document.getElementById("modelSel");
+    const allModels = [
+      ...d.ollama.models.map(m => ({m, src:"Ollama"})),
+      ...d.jan.models.map(m => ({m, src:"Jan"})),
+    ];
+    modelSel.innerHTML = '<option value="">auto</option>' +
+      allModels.map(({m, src}) => `<option value="${h(m)}">[${src}] ${h(m)}</option>`).join("");
+
+    el.innerHTML = `
+      <div class="provider-card">
+        <div class="dot" style="background:${d.ollama.available ? "var(--ok)" : "var(--bad)"}"></div>
+        <div>
+          <div class="name">Ollama</div>
+          <div class="models">${d.ollama.base}
+            ${d.ollama.available ? `· ${d.ollama.models.length} model(s)` : "· " + (d.ollama.error||"not running")}</div>
+          ${d.ollama.models.length ? `<div style="margin-top:4px">${d.ollama.models.map(m=>`<span class="pill">${h(m)}</span>`).join("")}</div>` : ""}
+        </div>
+      </div>
+      <div class="provider-card">
+        <div class="dot" style="background:${d.jan.available ? "var(--ok)" : "var(--bad)"}"></div>
+        <div>
+          <div class="name">Jan</div>
+          <div class="models">${d.jan.base}
+            ${d.jan.available ? `· ${d.jan.models.length} model(s)` : "· " + (d.jan.error||"not running")}</div>
+          ${d.jan.models?.length ? `<div style="margin-top:4px">${d.jan.models.map(m=>`<span class="pill">${h(m)}</span>`).join("")}</div>` : ""}
+        </div>
+      </div>
+      <h3>auto-selection</h3>
+      <div class="card"><div class="k">active provider</div>
+        <div class="v" style="font-size:16px">${h(d.active)}</div></div>
+      <p class="muted" style="font-size:11px;margin-top:8px">
+        Ollama is tried first per role-model preference list.<br>
+        Jan is auto-fallback when Ollama is unavailable.<br>
+        Override with the provider selector in the toolbar.
+      </p>
+    `;
+  } catch(e) {
+    document.getElementById("providers-panel").innerHTML =
+      `<div class="placeholder">Cannot reach server at ${API}</div>`;
+  }
+}
+
+function updateHeartbeat(msg) {
+  if (!msg.ollama) return;
+  // Silently update provider availability dot in providers tab
+}
+
+// ── Helpers ────────────────────────────────────────────────────────────────
+
+function h(s) {
+  return String(s??"-").replace(/[&<>"']/g, c =>
+    ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+}
+
+function activateTab(name) {
+  document.querySelectorAll(".tab").forEach(b => {
+    if (b.dataset.tab === name) b.click();
+  });
+}
+
+// ── File drop ──────────────────────────────────────────────────────────────
+
+const drop = document.getElementById("drop-zone");
+["dragover","dragenter"].forEach(ev => drop.addEventListener(ev, e => {
+  e.preventDefault(); drop.classList.add("over");
+}));
+["dragleave","drop"].forEach(ev => drop.addEventListener(ev, () => drop.classList.remove("over")));
+drop.addEventListener("drop", e => {
+  e.preventDefault();
+  const file = e.dataTransfer.files[0];
+  if (!file) return;
+  const ext = file.name.split(".").pop()?.toLowerCase() || "";
+  const extLang = {py:"python",ts:"typescript",tsx:"typescript",js:"javascript",
+    jsx:"javascript",json:"json",html:"html",css:"css",yaml:"yaml",yml:"yaml",sh:"shell"};
+  if (extLang[ext]) document.getElementById("langSel").value = extLang[ext];
+  new FileReader().onload = ev => {
+    document.getElementById("src").value = ev.target.result;
+    analyze(false);
+  };
+  (new FileReader()).addEventListener("load", ev => {
+    document.getElementById("src").value = ev.target.result;
+    analyze(false);
+  });
+  const fr = new FileReader();
+  fr.onload = ev => { document.getElementById("src").value = ev.target.result; analyze(false); };
+  fr.readAsText(file);
+});
+
+// ── Buttons ────────────────────────────────────────────────────────────────
+
+document.getElementById("clearBtn").addEventListener("click", () => {
+  document.getElementById("src").value = "";
+  ["tab-report","tab-metrics"].forEach(id => {
+    document.getElementById(id).innerHTML = '<div class="placeholder">Paste code and click Analyze</div>';
+  });
+});
+
+document.getElementById("clearLog").addEventListener("click", () => {
+  document.getElementById("event-log").innerHTML = "";
+});
+
+document.getElementById("loadSample").addEventListener("click", () => {
+  document.getElementById("src").value = SAMPLE;
+  analyze(false);
+});
+
+// ── Init ───────────────────────────────────────────────────────────────────
+
+const SAMPLE = `"""Property manager — FastAPI + async SQLite."""
+import asyncio
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
+import aiosqlite
+
+app = FastAPI(title="property-manager")
+DB = "properties.db"
+
+class Property(BaseModel):
+    address: str
+    rent_usd: float
+    bedrooms: int
+
+@app.on_event("startup")
+async def startup():
+    async with aiosqlite.connect(DB) as db:
+        await db.execute(
+            "CREATE TABLE IF NOT EXISTS properties "
+            "(id INTEGER PRIMARY KEY, address TEXT, rent REAL, bedrooms INTEGER)"
+        )
+        await db.commit()
+
+@app.get("/properties")
+async def list_properties():
+    async with aiosqlite.connect(DB) as db:
+        cur = await db.execute("SELECT * FROM properties")
+        rows = await cur.fetchall()
+    return [{"id": r[0], "address": r[1], "rent_usd": r[2], "bedrooms": r[3]} for r in rows]
+
+@app.post("/properties", status_code=201)
+async def create_property(p: Property):
+    # TODO: validate that rent_usd > 0
+    async with aiosqlite.connect(DB) as db:
+        cur = await db.execute(
+            "INSERT INTO properties (address, rent, bedrooms) VALUES (?,?,?)",
+            (p.address, p.rent_usd, p.bedrooms)
+        )
+        await db.commit()
+    return {"id": cur.lastrowid, **p.dict()}
+`;
+
+connectWS();
+</script>
+</body>
+</html>

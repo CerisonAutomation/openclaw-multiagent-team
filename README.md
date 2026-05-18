@@ -47,7 +47,8 @@ Sonnet↔Haiku routing).
 | `openai`     | `gpt-4o-mini`                                | OpenAI direct. |
 | `groq`       | `llama-3.3-70b-versatile`                    | Fastest tokens/sec. |
 | `deepseek`   | `deepseek-chat`                              | Cheapest. |
-| `ollama`     | `llama3.1:latest`                            | Local. No cost. No network. |
+| `ollama`     | `mistral:latest` (routing) / `deepseek-r1:8b` (reasoning) / `qwen2.5-coder:7b` (code) | Local. No cost. No network. |
+| `jan`        | auto-detected from running Jan instance      | Local fallback when Ollama is offline. |
 | `mock`       | `mock-1`                                     | Offline dry-run for CI / smoke tests. |
 
 Auto-detect tries them in the order shown (so `openrouter` and `nvidia` win
@@ -205,12 +206,143 @@ openclaw/
 Everything theatrical was dropped. Every pattern kept was implemented as
 runnable Python with tests.
 
+## Jan integration — will Claude Code use it?
+
+**Short answer: two different things happen.**
+
+| What | Uses Jan? | How |
+|------|-----------|-----|
+| Claude Code's own AI reasoning | No — Claude always uses Anthropic | That's the AI talking to you |
+| **Inspector skills (analyze, critic, fix...)** | **Yes — automatically** | Skills call Jan's API at `127.0.0.1:1337/v1` |
+| Jan's "Claude Code" experimental integration | Optional — redirects Claude Code itself to Jan | See setup below |
+
+### Option A — Inspector uses Jan (default, already works)
+
+When you run `python tools/run_inspector.py` and ask Claude to analyze code,
+the inspector calls your Jan model directly. No extra setup — just make sure
+Jan is running.
+
+```bash
+# 1. Copy and fill the env file
+cp .env.example .env
+# Set JAN_MODEL=Qwen3_5-9B-Uncensored-HauhauCS-Aggressive-Q4_K_M
+# (or whatever model you have loaded in Jan)
+
+# 2. Start the inspector
+python tools/run_inspector.py
+
+# 3. Ask Claude to run a skill — it calls Jan automatically
+# "Analyze this Python file for security issues"
+# "Give me a critic score for this code"
+```
+
+### Option B — Route Claude Code itself through Jan (experimental)
+
+Jan has a "Claude Code" integration under Settings → Integrations → Experimental.
+This makes Jan impersonate Anthropic's API so Claude Code uses your local model
+for its own reasoning:
+
+1. Open Jan → Settings → Integrations → Claude Code → Enable
+2. Jan gives you a local endpoint like `http://127.0.0.1:1337/v1`
+3. Set environment variable before starting Claude Code:
+   ```bash
+   ANTHROPIC_BASE_URL=http://127.0.0.1:1337/v1 claude .
+   ```
+4. Claude Code now sends its reasoning to your Jan model instead of Anthropic
+
+> **Note:** Option B means Claude Code thinks with your local Qwen3 model.
+> Quality depends on the model — it works but a 9B uncensored model is less
+> capable than Claude Sonnet for complex coding tasks.
+
+---
+
+## Local LLM inspector (Ollama + Jan)
+
+A second tool stack for running **all agents locally** — no API keys, no cloud.
+Works with **Jan only** (no Ollama needed).
+
+```bash
+# start the inspector server (Jan auto-detected, no config needed)
+python tools/run_inspector.py        # FastAPI on :8765
+
+# or run a one-off skill directly
+curl -X POST http://localhost:8765/api/skills/run \
+  -H 'content-type: application/json' \
+  -d '{"skill":"critic","source":"def foo(): pass","provider":"auto"}'
+```
+
+**Model routing** (uses best installed model per role, auto-detected):
+
+| Role | First choice | Fallback |
+|------|-------------|---------|
+| intent / summarizer | `mistral` | `llama3`, `qwen` |
+| architect / critic | `deepseek-r1` | `qwen3`, `llama3` |
+| coder / reviewer / tester | `qwen2.5-coder` | `qwen3`, `deepseek-r1` |
+| fixer | `deepseek-r1` | `qwen2.5-coder` |
+
+Jan is used automatically as a fallback if Ollama is offline.
+
+**Inspector API endpoints:**
+
+| Method | Path | What it does |
+|--------|------|-------------|
+| GET | `/api/providers` | Ollama + Jan status, active provider |
+| GET | `/api/skills` | List all 9 built-in skills |
+| POST | `/api/skills/run` | Run a skill on source code |
+| POST | `/api/relay` | Relay: auto-classify intent → pick tools → synthesize |
+| POST | `/api/loop/plan` | Plan a bounded autonomous loop |
+| GET | `/api/relay/history/{id}` | Session history |
+| WS | `/ws` | Real-time skill results |
+
+---
+
+## Browser tools (Playwright MCP)
+
+The project ships a `.mcp.json` that gives Claude Code a real browser. Once set
+up, **you just ask in plain English** — no code needed:
+
+> "Go to github.com/cerisonautomation and screenshot the repo list"
+> "Fill in the login form at localhost:3000 with user=admin pass=test and click submit"
+> "Scrape the pricing table from that URL and give me a JSON list"
+> "Check if the deploy at https://myapp.vercel.app actually loads"
+
+Claude navigates, clicks, fills forms, screenshots, and reads page content on
+your behalf.
+
+### Setup (one-time, on your local machine)
+
+```bash
+# 1. Install Node.js if you don't have it — https://nodejs.org
+# 2. Install the MCP server
+npm install -g @playwright/mcp
+# 3. Install the browser
+npx playwright install chromium
+# 4. Open this project in Claude Code — browser tools appear automatically
+claude .
+```
+
+The `.mcp.json` in the project root registers the server. Claude Code picks it
+up on start; no further config needed.
+
+### What Claude can do with the browser
+
+| You say | Claude does |
+|---------|------------|
+| "Go to X and screenshot it" | navigates + takes screenshot shown to you |
+| "Click the Sign Up button" | finds + clicks the element |
+| "Fill in email field with foo@bar.com" | types into the form |
+| "Extract all links from that page" | reads DOM, returns list |
+| "Run `document.title` on that page" | executes JS, returns result |
+| "Check if the button is disabled" | reads element state |
+
+---
+
 ## Testing
 
 ```bash
 pip install -e ".[dev]"
 pytest -q
-# 28 passed
+# 92 passed
 ```
 
 The whole suite runs against `MockProvider` — no API key required, no network.

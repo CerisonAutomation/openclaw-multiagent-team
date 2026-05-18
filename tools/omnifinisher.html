@@ -1,0 +1,690 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>omnifinisher — autodetect &amp; compile inspector</title>
+<style>
+  :root {
+    --bg: #0e1116;
+    --panel: #161b22;
+    --panel-2: #1c222b;
+    --border: #2a313c;
+    --fg: #e6edf3;
+    --muted: #8b949e;
+    --accent: #58a6ff;
+    --ok: #3fb950;
+    --warn: #d29922;
+    --bad: #f85149;
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg);
+    font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  header { padding: 14px 20px; border-bottom: 1px solid var(--border);
+    display: flex; align-items: baseline; gap: 14px; }
+  header h1 { margin: 0; font-size: 16px; font-weight: 600; }
+  header .sub { color: var(--muted); font-size: 12px; }
+  header .spacer { flex: 1; }
+  header .actions button { margin-left: 6px; }
+  main { display: grid; grid-template-columns: 1fr 1fr; gap: 0;
+    height: calc(100% - 51px); }
+  .pane { display: flex; flex-direction: column; min-width: 0; }
+  .pane + .pane { border-left: 1px solid var(--border); }
+  .tabs { display: flex; border-bottom: 1px solid var(--border); background: var(--panel); }
+  .tabs button { background: transparent; border: 0; color: var(--muted);
+    padding: 10px 14px; font-size: 13px; cursor: pointer; border-bottom: 2px solid transparent; }
+  .tabs button.active { color: var(--fg); border-bottom-color: var(--accent); }
+  .tab-body { flex: 1; overflow: auto; padding: 16px 18px; }
+  textarea { width: 100%; height: 100%; resize: none; background: var(--panel-2);
+    color: var(--fg); border: 0; padding: 14px; font: 13px/1.45 var(--mono);
+    outline: none; }
+  .dropzone { border: 1px dashed var(--border); border-radius: 6px; padding: 10px 12px;
+    color: var(--muted); font-size: 12px; margin: 0 0 8px 0; }
+  .dropzone.over { border-color: var(--accent); color: var(--accent); }
+  button.btn { background: var(--panel-2); color: var(--fg); border: 1px solid var(--border);
+    padding: 6px 12px; border-radius: 4px; cursor: pointer; font-size: 13px; }
+  button.btn:hover { border-color: var(--accent); }
+  button.btn.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+  button.btn.primary:hover { filter: brightness(1.1); }
+  .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  .grid { display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); }
+  .card { background: var(--panel-2); border: 1px solid var(--border); border-radius: 6px;
+    padding: 10px 12px; }
+  .card .k { color: var(--muted); font-size: 11px; text-transform: uppercase;
+    letter-spacing: 0.04em; }
+  .card .v { font-size: 18px; font-weight: 600; margin-top: 2px; }
+  .v.ok { color: var(--ok); } .v.warn { color: var(--warn); } .v.bad { color: var(--bad); }
+  pre { background: var(--panel-2); border: 1px solid var(--border); border-radius: 6px;
+    padding: 12px; overflow: auto; font: 12px/1.45 var(--mono); margin: 8px 0; }
+  .pill { display: inline-block; padding: 2px 8px; border-radius: 999px;
+    font-size: 11px; border: 1px solid var(--border); color: var(--muted); margin-right: 4px; }
+  .pill.ok { color: var(--ok); border-color: var(--ok); }
+  .pill.warn { color: var(--warn); border-color: var(--warn); }
+  .pill.bad { color: var(--bad); border-color: var(--bad); }
+  .bar { height: 6px; background: var(--panel-2); border-radius: 3px; overflow: hidden; }
+  .bar > div { height: 100%; background: var(--accent); transition: width 0.3s; }
+  .check { display: flex; gap: 10px; padding: 8px 10px; border-radius: 4px;
+    border: 1px solid var(--border); margin-bottom: 6px; align-items: flex-start; }
+  .check .mark { font: bold 12px/1 var(--mono); padding: 2px 6px; border-radius: 3px; }
+  .check .mark.ok { background: rgba(63,185,80,0.15); color: var(--ok); }
+  .check .mark.warn { background: rgba(210,153,34,0.15); color: var(--warn); }
+  .check .mark.bad { background: rgba(248,81,73,0.15); color: var(--bad); }
+  .check .body { flex: 1; }
+  .check .label { font-weight: 500; }
+  .check .detail { color: var(--muted); font-size: 12px; margin-top: 2px; }
+  details { margin: 8px 0; }
+  summary { cursor: pointer; color: var(--muted); padding: 6px 0; }
+  summary:hover { color: var(--fg); }
+  .muted { color: var(--muted); }
+  .placeholder { color: var(--muted); padding: 30px; text-align: center; }
+  h3 { margin: 16px 0 8px 0; font-size: 13px; text-transform: uppercase;
+    letter-spacing: 0.05em; color: var(--muted); }
+</style>
+</head>
+<body>
+<header>
+  <h1>omnifinisher</h1>
+  <span class="sub">autodetect &amp; compile inspector — single-file, no build</span>
+  <span class="spacer"></span>
+  <span class="actions">
+    <button class="btn" id="loadSample">Load sample</button>
+    <button class="btn" id="clearAll">Clear</button>
+    <button class="btn" id="exportReport">Export JSON</button>
+    <button class="btn primary" id="analyze">Analyze</button>
+  </span>
+</header>
+
+<main>
+  <section class="pane">
+    <div class="tabs">
+      <button class="tab active" data-tab="input">Input</button>
+    </div>
+    <div class="tab-body" style="padding: 0; display: flex; flex-direction: column;">
+      <div class="dropzone" id="drop" style="margin: 10px;">
+        Paste code, or drop a file here. Detection runs as you type (debounced).
+      </div>
+      <textarea id="src" spellcheck="false" placeholder="// paste any TS / JS / JSON / Python / HTML / CSS here"></textarea>
+    </div>
+  </section>
+
+  <section class="pane">
+    <div class="tabs">
+      <button class="tab active" data-tab="report">Report</button>
+      <button class="tab" data-tab="detect">Detection</button>
+      <button class="tab" data-tab="compile">Compile</button>
+      <button class="tab" data-tab="metrics">Metrics</button>
+      <button class="tab" data-tab="checks">Checks</button>
+    </div>
+    <div class="tab-body" id="out-report"></div>
+    <div class="tab-body" id="out-detect" hidden></div>
+    <div class="tab-body" id="out-compile" hidden></div>
+    <div class="tab-body" id="out-metrics" hidden></div>
+    <div class="tab-body" id="out-checks" hidden></div>
+  </section>
+</main>
+
+<script>
+"use strict";
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 1. Language autodetect — score signals per language, pick the highest
+// ─────────────────────────────────────────────────────────────────────────────
+
+const LANG_SIGNALS = {
+  json: [
+    { re: /^\s*[\{\[]/, w: 3 },
+    { re: /^\s*[\{\[][\s\S]*[\}\]]\s*$/, w: 4 },
+  ],
+  typescript: [
+    { re: /\binterface\s+\w+\s*\{/, w: 4 },
+    { re: /\btype\s+\w+\s*=/, w: 3 },
+    { re: /:\s*(string|number|boolean|any|void|unknown)\b/, w: 2 },
+    { re: /\bas\s+(string|number|const|any|\w+)\b/, w: 2 },
+    { re: /\benum\s+\w+\s*\{/, w: 3 },
+    { re: /<[A-Z]\w*(?:,\s*[A-Z]\w*)*>/, w: 1 },
+  ],
+  javascript: [
+    { re: /\b(const|let|var)\s+\w+\s*=/, w: 2 },
+    { re: /\bfunction\s*\w*\s*\(/, w: 2 },
+    { re: /=>\s*\{/, w: 2 },
+    { re: /\bconsole\.(log|error|warn)\(/, w: 1 },
+    { re: /\brequire\(['"]/, w: 2 },
+    { re: /\bmodule\.exports\b/, w: 2 },
+  ],
+  python: [
+    { re: /^\s*def\s+\w+\s*\(/m, w: 4 },
+    { re: /^\s*class\s+\w+\s*[:\(]/m, w: 3 },
+    { re: /^\s*import\s+\w+/m, w: 2 },
+    { re: /^\s*from\s+[\w.]+\s+import\s+/m, w: 3 },
+    { re: /\bprint\s*\(/, w: 1 },
+    { re: /:\s*$/m, w: 1 },
+    { re: /\bself\b/, w: 2 },
+  ],
+  html: [
+    { re: /<!doctype\s+html/i, w: 5 },
+    { re: /<html[\s>]/i, w: 4 },
+    { re: /<\/?(div|span|p|a|body|head|script|style)[\s>]/i, w: 2 },
+  ],
+  css: [
+    { re: /^[.#@]?[\w-]+\s*\{[\s\S]*?\}/m, w: 3 },
+    { re: /:\s*[\w-]+\s*;/, w: 1 },
+    { re: /@(media|keyframes|font-face|import)\b/, w: 3 },
+  ],
+  sql: [
+    { re: /\b(SELECT|INSERT|UPDATE|DELETE|CREATE|ALTER|DROP)\b/i, w: 3 },
+    { re: /\bFROM\s+\w+/i, w: 2 },
+    { re: /\bWHERE\s+/i, w: 2 },
+  ],
+  shell: [
+    { re: /^#!\/(usr\/)?bin\/(env\s+)?(bash|sh|zsh)/, w: 5 },
+    { re: /\b(if|then|fi|else|elif)\b/, w: 1 },
+    { re: /\$\{?\w+\}?/, w: 1 },
+    { re: /\b(echo|export|cd|ls|grep|sed|awk)\s+/, w: 2 },
+  ],
+  yaml: [
+    { re: /^---\s*$/m, w: 4 },
+    { re: /^\s*[\w-]+:\s*[\w'"]/m, w: 2 },
+    { re: /^\s*-\s+\w+:/m, w: 2 },
+  ],
+};
+
+function detectLanguage(src) {
+  if (!src.trim()) return { lang: "empty", scores: {} };
+  const scores = {};
+  for (const [lang, signals] of Object.entries(LANG_SIGNALS)) {
+    let s = 0;
+    for (const sig of signals) if (sig.re.test(src)) s += sig.w;
+    scores[lang] = s;
+  }
+  // JSON requires it to actually parse to a structure
+  if (scores.json > 0) {
+    try { JSON.parse(src); } catch { scores.json = Math.max(0, scores.json - 3); }
+  }
+  // TS implies JS — only call it TS if TS-specific signals beat plain JS
+  if (scores.typescript >= 3 && scores.typescript > scores.javascript) {
+    scores.javascript = Math.max(0, scores.javascript - 2);
+  } else if (scores.typescript > 0 && scores.typescript < 3) {
+    scores.javascript += scores.typescript;
+    scores.typescript = 0;
+  }
+  const lang = Object.entries(scores).sort((a, b) => b[1] - a[1])[0];
+  return { lang: lang && lang[1] > 0 ? lang[0] : "unknown", scores };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 2. Intent autodetect — what is the code/text trying to do?
+// ─────────────────────────────────────────────────────────────────────────────
+
+const INTENT_SIGNALS = [
+  { intent: "react_ui",   re: /\b(useState|useEffect|useCallback|React\.|jsx|tsx)\b|<[A-Z]\w+/, },
+  { intent: "rest_api",   re: /\b(express|fastapi|flask|FastAPI|app\.(get|post|put|delete))\b/, },
+  { intent: "data_pipe",  re: /\b(pandas|numpy|polars|DataFrame|pd\.read_)/, },
+  { intent: "test_suite", re: /\b(describe|it\(|test\(|pytest|assert\s+|expect\()/, },
+  { intent: "config",     re: /^---|^\[[\w.-]+\]|^{[\s\S]*}\s*$/m, },
+  { intent: "build_script", re: /\b(npm|pnpm|yarn|pip|poetry|cargo|make|docker)\s+\w+/, },
+  { intent: "ml_model",   re: /\b(torch|tensorflow|sklearn|transformers|model\.(fit|predict))\b/, },
+];
+
+function detectIntent(src) {
+  if (!src.trim()) return [];
+  return INTENT_SIGNALS.filter((s) => s.re.test(src)).map((s) => s.intent);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 3. Compile / parse engine — real syntax checks where the browser can
+// ─────────────────────────────────────────────────────────────────────────────
+
+function compileEngine(src, lang) {
+  const out = { language: lang, ok: false, mode: "skipped", errors: [], warnings: [] };
+
+  if (lang === "json") {
+    try { JSON.parse(src); out.ok = true; out.mode = "JSON.parse"; }
+    catch (e) { out.errors.push(String(e.message || e)); out.mode = "JSON.parse"; }
+    return out;
+  }
+
+  if (lang === "javascript") {
+    try { new Function(src); out.ok = true; out.mode = "Function() constructor"; }
+    catch (e) { out.errors.push(String(e.message || e)); out.mode = "Function() constructor"; }
+    return out;
+  }
+
+  if (lang === "typescript") {
+    // Strip TS-only constructs heuristically, then JS-parse.
+    let js = src
+      .replace(/\binterface\s+\w+\s*(<[^>]+>)?\s*\{[\s\S]*?\}/g, "")
+      .replace(/\btype\s+\w[\w$]*\s*(<[^>]+>)?\s*=\s*[^;]+;?/g, "")
+      .replace(/\benum\s+\w+\s*\{[\s\S]*?\}/g, "")
+      .replace(/:\s*[A-Za-z_$][\w$.<>\[\]\s,|&?]*?(?=[,)=;\n])/g, "")
+      .replace(/\bas\s+[A-Za-z_$][\w$.<>\[\]\s,|&?]*/g, "")
+      .replace(/<[A-Z][\w$,\s]*>(?=\s*\()/g, "")
+      .replace(/\bpublic\s+|\bprivate\s+|\bprotected\s+|\breadonly\s+/g, "");
+    try { new Function(js); out.ok = true; out.mode = "TS-strip + Function()"; }
+    catch (e) {
+      out.errors.push(String(e.message || e));
+      out.warnings.push("TS-strip is heuristic; some valid TS may not parse here.");
+      out.mode = "TS-strip + Function()";
+    }
+    return out;
+  }
+
+  if (lang === "html") {
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(src, "text/html");
+    const err = doc.querySelector("parsererror");
+    out.mode = "DOMParser";
+    if (err) { out.errors.push(err.textContent.trim().slice(0, 300)); }
+    else { out.ok = true; }
+    // unmatched-tag warnings
+    const tags = (src.match(/<\/?[a-zA-Z][\w-]*[^>]*>/g) || []);
+    out.warnings.push(`${tags.length} tag occurrences`);
+    return out;
+  }
+
+  if (lang === "css") {
+    const open = (src.match(/\{/g) || []).length;
+    const close = (src.match(/\}/g) || []).length;
+    out.mode = "brace balance + CSSOM";
+    if (open !== close) out.errors.push(`unbalanced braces: ${open} vs ${close}`);
+    try {
+      const s = new CSSStyleSheet();
+      s.replaceSync(src);
+      if (out.errors.length === 0) out.ok = true;
+    } catch (e) { out.errors.push(String(e.message || e)); }
+    return out;
+  }
+
+  if (lang === "python") {
+    out.mode = "bracket + indent sanity";
+    const stack = [];
+    const pairs = { ")": "(", "]": "[", "}": "{" };
+    const lines = src.split("\n");
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i].replace(/#.*$/, "");
+      for (const ch of line) {
+        if ("([{".includes(ch)) stack.push({ ch, line: i + 1 });
+        else if (")]}".includes(ch)) {
+          const top = stack.pop();
+          if (!top || top.ch !== pairs[ch]) {
+            out.errors.push(`unmatched ${ch} at line ${i + 1}`);
+          }
+        }
+      }
+    }
+    if (stack.length) out.errors.push(`unclosed ${stack[0].ch} at line ${stack[0].line}`);
+    // Lines ending in : should be followed by an indented block
+    for (let i = 0; i < lines.length - 1; i++) {
+      if (/:\s*(#.*)?$/.test(lines[i]) && lines[i].trim() && !lines[i].trim().startsWith("#")) {
+        const next = lines[i + 1];
+        const curIndent = lines[i].match(/^\s*/)[0].length;
+        const nextIndent = next ? next.match(/^\s*/)[0].length : 0;
+        if (next && next.trim() && nextIndent <= curIndent) {
+          out.warnings.push(`line ${i + 1}: ':' not followed by an indented block`);
+        }
+      }
+    }
+    if (out.errors.length === 0) out.ok = true;
+    return out;
+  }
+
+  if (lang === "yaml" || lang === "sql" || lang === "shell") {
+    out.mode = "balance check only";
+    const open = (src.match(/[\(\[\{]/g) || []).length;
+    const close = (src.match(/[\)\]\}]/g) || []).length;
+    if (open !== close) out.errors.push(`unbalanced brackets: open=${open} close=${close}`);
+    else out.ok = true;
+    return out;
+  }
+
+  out.warnings.push(`no compiler for language '${lang}' — falling back to bracket balance`);
+  const open = (src.match(/[\(\[\{]/g) || []).length;
+  const close = (src.match(/[\)\]\}]/g) || []).length;
+  out.mode = "bracket balance";
+  if (open === close) out.ok = true;
+  else out.errors.push(`brackets unbalanced: ${open} vs ${close}`);
+  return out;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 4. Metrics — actual measurements, no hard-coded values
+// ─────────────────────────────────────────────────────────────────────────────
+
+function computeMetrics(src, lang) {
+  const lines = src.split("\n");
+  const nonBlank = lines.filter((l) => l.trim().length > 0);
+  const commentRe = lang === "python" || lang === "shell" || lang === "yaml"
+    ? /^\s*#/
+    : /^\s*(\/\/|\*|\/\*)/;
+  const commentLines = lines.filter((l) => commentRe.test(l)).length;
+  const todos = (src.match(/\b(TODO|FIXME|XXX|HACK)\b/g) || []).length;
+  const branches = (src.match(/\b(if|else|elif|for|while|switch|case|catch|try)\b/g) || []).length;
+  const fnCount = (src.match(/\b(function|def|fn)\b|\=>/g) || []).length;
+  const longestLine = Math.max(0, ...lines.map((l) => l.length));
+  const avgLineLen = nonBlank.length
+    ? Math.round(nonBlank.reduce((s, l) => s + l.length, 0) / nonBlank.length)
+    : 0;
+  const commentRatio = nonBlank.length ? +(commentLines / nonBlank.length).toFixed(3) : 0;
+  // Cyclomatic-ish complexity per function
+  const complexity = fnCount ? +(branches / fnCount).toFixed(2) : branches;
+  return {
+    bytes: new Blob([src]).size,
+    lines: lines.length,
+    code_lines: nonBlank.length - commentLines,
+    comment_lines: commentLines,
+    comment_ratio: commentRatio,
+    function_count: fnCount,
+    branch_keywords: branches,
+    cyclomatic_avg: complexity,
+    longest_line: longestLine,
+    avg_line_length: avgLineLen,
+    todo_markers: todos,
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 5. Trait-style checks — each check is a concrete predicate, not a slogan
+// ─────────────────────────────────────────────────────────────────────────────
+
+function runChecks(src, lang, metrics, compile) {
+  const checks = [];
+  const add = (status, label, detail) => checks.push({ status, label, detail });
+
+  add(compile.ok ? "ok" : "bad",
+      `${lang} parse`,
+      compile.ok
+        ? `passed via ${compile.mode}`
+        : `failed: ${compile.errors.slice(0, 2).join("; ")}`);
+
+  add(metrics.longest_line <= 120 ? "ok" : "warn",
+      "line length ≤ 120",
+      `longest line is ${metrics.longest_line} chars`);
+
+  add(metrics.cyclomatic_avg <= 10 ? "ok" : "warn",
+      "cyclomatic-avg ≤ 10",
+      `~${metrics.cyclomatic_avg} branches per function`);
+
+  add(metrics.todo_markers === 0 ? "ok" : "warn",
+      "no TODO / FIXME / XXX",
+      metrics.todo_markers === 0 ? "none found" : `${metrics.todo_markers} marker(s)`);
+
+  // Comment ratio: a tiny amount is healthy; way too much is suspicious
+  if (metrics.code_lines > 20) {
+    if (metrics.comment_ratio < 0.02)
+      add("warn", "comments present", `comment ratio is ${metrics.comment_ratio}`);
+    else if (metrics.comment_ratio > 0.4)
+      add("warn", "comment-to-code ratio", `unusually high (${metrics.comment_ratio})`);
+    else
+      add("ok", "comment-to-code ratio", `healthy (${metrics.comment_ratio})`);
+  }
+
+  // Detect leftover prompt-engineering theater
+  const theatricalRe = /\b(DIVINE|OMNIPOTENT|GODCRAFT|QUANTUM[_ ]SEAL|ULTRA[_ ]PERFECTION|15\/10|OPULENCE)\b/i;
+  if (theatricalRe.test(src))
+    add("warn", "no theatrical claims",
+        "found marketing-style tokens (e.g. DIVINE, QUANTUM_SEAL, 15/10) — strip before shipping");
+  else add("ok", "no theatrical claims", "none found");
+
+  // Language-specific: TS/JS — no `eval`, no `var`
+  if (lang === "javascript" || lang === "typescript") {
+    if (/\beval\s*\(/.test(src)) add("bad", "no eval()", "found eval(...)");
+    else add("ok", "no eval()", "none");
+    if (/\bvar\s+\w/.test(src)) add("warn", "no var (use const/let)", "found var declarations");
+    else add("ok", "no var (use const/let)", "none");
+  }
+
+  // Python-specific: no bare except, no print at top level for libs
+  if (lang === "python") {
+    if (/\bexcept\s*:/.test(src)) add("warn", "no bare except", "found bare 'except:'");
+    else add("ok", "no bare except", "none");
+  }
+
+  return checks;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 6. Real hash — SHA-256 via SubtleCrypto
+// ─────────────────────────────────────────────────────────────────────────────
+
+async function sha256(text) {
+  const buf = new TextEncoder().encode(text);
+  const digest = await crypto.subtle.digest("SHA-256", buf);
+  return Array.from(new Uint8Array(digest))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 7. Scoring — derived from real checks, not hard-coded
+// ─────────────────────────────────────────────────────────────────────────────
+
+function score(checks) {
+  if (!checks.length) return { value: 0, of: 10, label: "n/a" };
+  const weights = { ok: 1.0, warn: 0.5, bad: 0.0 };
+  const total = checks.reduce((s, c) => s + (weights[c.status] ?? 0), 0);
+  const value = +((total / checks.length) * 10).toFixed(1);
+  const label = value >= 8 ? "ship-ready" : value >= 6 ? "needs polish" : "needs work";
+  return { value, of: 10, label };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 8. Glue — analyze + render
+// ─────────────────────────────────────────────────────────────────────────────
+
+let lastReport = null;
+
+async function analyze() {
+  const src = document.getElementById("src").value;
+  const det = detectLanguage(src);
+  const intent = detectIntent(src);
+  const compile = compileEngine(src, det.lang);
+  const metrics = computeMetrics(src, det.lang);
+  const checks = runChecks(src, det.lang, metrics, compile);
+  const sc = score(checks);
+  const hash = src ? await sha256(src) : "";
+  const report = {
+    generated_at: new Date().toISOString(),
+    bytes: metrics.bytes,
+    sha256: hash,
+    detected: { language: det.lang, scores: det.scores, intent_signals: intent },
+    compile: compile,
+    metrics: metrics,
+    checks: checks,
+    score: sc,
+  };
+  lastReport = report;
+  render(report);
+}
+
+function render(r) {
+  renderReport(r);
+  renderDetect(r);
+  renderCompile(r);
+  renderMetrics(r);
+  renderChecks(r);
+}
+
+function renderReport(r) {
+  const el = document.getElementById("out-report");
+  const cls = r.score.value >= 8 ? "ok" : r.score.value >= 6 ? "warn" : "bad";
+  const okCount = r.checks.filter((c) => c.status === "ok").length;
+  const warnCount = r.checks.filter((c) => c.status === "warn").length;
+  const badCount = r.checks.filter((c) => c.status === "bad").length;
+  el.innerHTML = `
+    <div class="grid">
+      <div class="card"><div class="k">score</div>
+        <div class="v ${cls}">${r.score.value} / ${r.score.of}</div>
+        <div class="muted" style="font-size:12px">${r.score.label}</div></div>
+      <div class="card"><div class="k">language</div>
+        <div class="v">${escapeHtml(r.detected.language)}</div></div>
+      <div class="card"><div class="k">parse</div>
+        <div class="v ${r.compile.ok ? "ok" : "bad"}">${r.compile.ok ? "ok" : "fail"}</div>
+        <div class="muted" style="font-size:12px">${escapeHtml(r.compile.mode)}</div></div>
+      <div class="card"><div class="k">bytes</div>
+        <div class="v">${r.bytes}</div></div>
+    </div>
+    <h3>summary</h3>
+    <div>
+      <span class="pill ok">${okCount} pass</span>
+      <span class="pill warn">${warnCount} warn</span>
+      <span class="pill bad">${badCount} fail</span>
+      ${r.detected.intent_signals.map((i) => `<span class="pill">${escapeHtml(i)}</span>`).join("")}
+    </div>
+    <h3>sha-256</h3>
+    <pre>${r.sha256 || "(empty input)"}</pre>
+    ${r.compile.errors.length ? `<h3>parse errors</h3><pre>${r.compile.errors.map(escapeHtml).join("\n")}</pre>` : ""}
+  `;
+}
+
+function renderDetect(r) {
+  const el = document.getElementById("out-detect");
+  const scores = Object.entries(r.detected.scores).sort((a, b) => b[1] - a[1]);
+  const max = Math.max(1, ...scores.map((s) => s[1]));
+  el.innerHTML = `
+    <h3>language: ${escapeHtml(r.detected.language)}</h3>
+    ${scores.map(([lang, val]) => `
+      <div style="margin:6px 0">
+        <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:2px">
+          <span>${lang}</span><span class="muted">${val}</span>
+        </div>
+        <div class="bar"><div style="width:${(val / max) * 100}%"></div></div>
+      </div>`).join("")}
+    <h3>intent signals</h3>
+    ${r.detected.intent_signals.length
+      ? r.detected.intent_signals.map((i) => `<span class="pill">${escapeHtml(i)}</span>`).join("")
+      : '<div class="muted">none detected</div>'}
+  `;
+}
+
+function renderCompile(r) {
+  const el = document.getElementById("out-compile");
+  el.innerHTML = `
+    <div class="grid">
+      <div class="card"><div class="k">status</div>
+        <div class="v ${r.compile.ok ? "ok" : "bad"}">${r.compile.ok ? "ok" : "fail"}</div></div>
+      <div class="card"><div class="k">mode</div>
+        <div class="v" style="font-size:14px">${escapeHtml(r.compile.mode)}</div></div>
+    </div>
+    ${r.compile.errors.length ? `<h3>errors</h3><pre>${r.compile.errors.map(escapeHtml).join("\n")}</pre>` : ""}
+    ${r.compile.warnings.length ? `<h3>warnings</h3><pre>${r.compile.warnings.map(escapeHtml).join("\n")}</pre>` : ""}
+  `;
+}
+
+function renderMetrics(r) {
+  const el = document.getElementById("out-metrics");
+  el.innerHTML = `
+    <div class="grid">
+      ${Object.entries(r.metrics).map(([k, v]) => `
+        <div class="card"><div class="k">${escapeHtml(k.replace(/_/g, " "))}</div>
+          <div class="v">${escapeHtml(String(v))}</div></div>
+      `).join("")}
+    </div>
+  `;
+}
+
+function renderChecks(r) {
+  const el = document.getElementById("out-checks");
+  el.innerHTML = r.checks.map((c) => `
+    <div class="check">
+      <span class="mark ${c.status}">${c.status.toUpperCase()}</span>
+      <div class="body">
+        <div class="label">${escapeHtml(c.label)}</div>
+        <div class="detail">${escapeHtml(c.detail)}</div>
+      </div>
+    </div>
+  `).join("") || '<div class="placeholder">no checks ran</div>';
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, (c) =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 9. UI wiring
+// ─────────────────────────────────────────────────────────────────────────────
+
+const tabs = document.querySelectorAll(".tab");
+tabs.forEach((t) => t.addEventListener("click", () => {
+  // Find sibling tabs (same parent .tabs)
+  const parent = t.parentElement;
+  parent.querySelectorAll(".tab").forEach((x) => x.classList.remove("active"));
+  t.classList.add("active");
+  const tabName = t.dataset.tab;
+  if (tabName === "input") return;  // input pane has only one tab
+  ["report", "detect", "compile", "metrics", "checks"].forEach((name) => {
+    const pane = document.getElementById(`out-${name}`);
+    if (pane) pane.hidden = name !== tabName;
+  });
+}));
+
+document.getElementById("analyze").addEventListener("click", analyze);
+document.getElementById("clearAll").addEventListener("click", () => {
+  document.getElementById("src").value = "";
+  ["report", "detect", "compile", "metrics", "checks"].forEach((name) => {
+    document.getElementById(`out-${name}`).innerHTML =
+      '<div class="placeholder">paste code and click Analyze</div>';
+  });
+});
+
+document.getElementById("exportReport").addEventListener("click", () => {
+  if (!lastReport) return alert("Run Analyze first.");
+  const blob = new Blob([JSON.stringify(lastReport, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `omnifinisher-report-${Date.now()}.json`;
+  a.click();
+  URL.revokeObjectURL(url);
+});
+
+document.getElementById("loadSample").addEventListener("click", () => {
+  document.getElementById("src").value = SAMPLE;
+  analyze();
+});
+
+// Drag & drop
+const drop = document.getElementById("drop");
+const src = document.getElementById("src");
+["dragover", "dragenter"].forEach((ev) => drop.addEventListener(ev, (e) => {
+  e.preventDefault(); drop.classList.add("over");
+}));
+["dragleave", "drop"].forEach((ev) => drop.addEventListener(ev, () => drop.classList.remove("over")));
+drop.addEventListener("drop", (e) => {
+  e.preventDefault();
+  const file = e.dataTransfer.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = () => { src.value = reader.result; analyze(); };
+  reader.readAsText(file);
+});
+
+// Debounced auto-analyze
+let timer = null;
+src.addEventListener("input", () => {
+  clearTimeout(timer);
+  timer = setTimeout(analyze, 400);
+});
+
+// Sample input
+const SAMPLE = `interface User {
+  id: number;
+  name: string;
+  email: string;
+}
+
+function greet(user: User): string {
+  // TODO: localize
+  if (!user.name) return "hello, stranger";
+  return \`hello, \${user.name}\`;
+}
+
+const u: User = { id: 1, name: "ada", email: "ada@example.com" };
+console.log(greet(u));
+`;
+
+// First paint
+document.getElementById("clearAll").click();
+</script>
+</body>
+</html>

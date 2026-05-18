@@ -19,6 +19,7 @@ anthropic = ["anthropic>=0.40"]
 openai = ["openai>=1.50"]
 all = ["anthropic>=0.40", "openai>=1.50"]
 dev = ["pytest>=8.0", "pytest-asyncio>=0.23", "ruff>=0.6", "anthropic>=0.40", "openai>=1.50"]
+browser = ["playwright>=1.40"]
 
 [project.scripts]
 openclaw = "openclaw.cli:main"
@@ -33,6 +34,7 @@ include = ["openclaw*"]
 [tool.ruff]
 line-length = 110
 target-version = "py310"
+
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
