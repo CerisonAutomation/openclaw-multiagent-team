@@ -166,11 +166,19 @@ class Orchestrator:
             cmd_gate = gates.gate_commands_succeeded(exit_codes)
             self.audit.add_phase("gate_commands", {"passed": cmd_gate.passed, "reason": cmd_gate.reason})
 
-        # ── PHASE 5 · CRITIQUE LOOP ─────────────────────────────────────────
+        # ── PHASE 5 · CRITIQUE LOOP (SAFLA adaptive weighting) ──────────────
         final_output = self._compose_summary(written, exit_codes, architecture)
+        _persistent_weak: str | None = None  # SAFLA: track dimension that fails repeatedly
         for i in range(1, self.config.max_critique_loops + 1):
             self._log(f"PHASE 5 · CRITIQUE  loop {i}/{self.config.max_critique_loops}")
-            scores = agents.critique(self.provider, task, final_output, self.audit)
+            # Inject adaptive focus hint after first loop if a weak dimension persists
+            critique_input = final_output
+            if _persistent_weak and i > 1:
+                critique_input += (
+                    f"\n\n[ADAPTIVE FOCUS: '{_persistent_weak}' has scored below threshold "
+                    f"across {i-1} loop(s) — weight this dimension heavily in your assessment]"
+                )
+            scores = agents.critique(self.provider, task, critique_input, self.audit)
             numeric = {k: v for k, v in scores.items() if isinstance(v, (int, float))}
             avg = sum(numeric.values()) / len(numeric) if numeric else 0.0
             worst_dim = scores.get("lowest_dimension", "?")
@@ -182,6 +190,8 @@ class Orchestrator:
             })
             qgate = gates.gate_quality_threshold(numeric, self.config.quality_threshold)
             self._log(f"  avg={avg:.1f}  worst={worst_dim}({worst_val:.1f})  → {qgate.reason}")
+            # SAFLA: update persistent weak tracker
+            _persistent_weak = worst_dim if worst_val < self.config.quality_threshold else None
             if qgate.passed or i == self.config.max_critique_loops:
                 self.audit.final_scores = numeric
                 self.audit.final_avg = round(avg, 2)

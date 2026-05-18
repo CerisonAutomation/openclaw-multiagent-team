@@ -258,3 +258,74 @@ def test_server_build(client: TestClient, tmp_path: Path) -> None:
     payload = r.json()
     assert "seal" in payload
     assert "audit" in payload
+
+
+# ── CLI: auto / setup / toml config ─────────────────────────────────────────
+
+def test_toml_config_no_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    from openclaw.cli import _load_toml_config
+    assert _load_toml_config() == {}
+
+
+def test_toml_config_parses_fields(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    (tmp_path / ".openclaw.toml").write_text(
+        "[openclaw]\n"
+        'provider = "openrouter"\n'
+        "iterations = 5\n"
+        "threshold = 8.0\n"
+    )
+    monkeypatch.chdir(tmp_path)
+    from openclaw.cli import _load_toml_config
+    cfg = _load_toml_config()
+    assert cfg["provider"] == "openrouter"
+    assert cfg["iterations"] == 5
+    assert cfg["threshold"] == 8.0
+
+
+def test_setup_cmd_creates_toml(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    for preset in PRESETS.values():
+        if preset.key_env:
+            monkeypatch.delenv(preset.key_env, raising=False)
+    monkeypatch.delenv("OPENCLAW_PROVIDER", raising=False)
+    from openclaw.cli import build_parser
+    parser = build_parser()
+    args = parser.parse_args(["setup"])
+    rc = args.func(args)
+    assert rc == 0
+    toml_path = tmp_path / ".openclaw.toml"
+    assert toml_path.exists()
+    assert "provider" in toml_path.read_text()
+
+
+def test_auto_cmd_in_git_repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import subprocess as sp
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("OPENCLAW_PROVIDER", "mock")
+    sp.run(["git", "init", str(tmp_path)], capture_output=True)
+    (tmp_path / "package.json").write_text('{"name":"x"}')
+    from openclaw.cli import build_parser
+    parser = build_parser()
+    args = parser.parse_args(["auto", "--quiet", "--iterations", "1"])
+    rc = args.func(args)
+    # auto detects git repo, runs fix — should succeed or fail gracefully
+    assert rc in (0, 1)
+
+
+def test_apply_toml_defaults_fills_missing(monkeypatch: pytest.MonkeyPatch) -> None:
+    import argparse
+    from openclaw.cli import _apply_toml_defaults
+    args = argparse.Namespace(provider=None, model=None, iterations=3, threshold=7.5)
+    _apply_toml_defaults(args, {"provider": "groq", "iterations": 5, "threshold": 8.0})
+    assert args.provider == "groq"
+    assert args.iterations == 5
+    assert args.threshold == 8.0
+
+
+def test_apply_toml_defaults_does_not_override_explicit(monkeypatch: pytest.MonkeyPatch) -> None:
+    import argparse
+    from openclaw.cli import _apply_toml_defaults
+    args = argparse.Namespace(provider="nvidia", model=None, iterations=3, threshold=7.5)
+    _apply_toml_defaults(args, {"provider": "groq"})
+    assert args.provider == "nvidia"  # explicit flag wins
