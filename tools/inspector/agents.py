@@ -153,6 +153,12 @@ class JanClient:
                 r = await c.get(f"{self.base}/models")
                 if r.status_code == 200:
                     names = [m["id"] for m in r.json().get("data", [])]
+                    # Pinned model goes first so it's always chosen
+                    pinned = self._cfg.jan_model
+                    if pinned and pinned not in names:
+                        names.insert(0, pinned)
+                    elif pinned and pinned in names:
+                        names = [pinned] + [n for n in names if n != pinned]
                     return JanStatus(available=True, models=names)
                 return JanStatus(available=False, error=f"HTTP {r.status_code}")
         except Exception as e:

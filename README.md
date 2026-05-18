@@ -206,12 +206,63 @@ openclaw/
 Everything theatrical was dropped. Every pattern kept was implemented as
 runnable Python with tests.
 
-## Local LLM inspector (Ollama + Jan)
+## Jan integration — will Claude Code use it?
 
-A second tool stack for running **all agents locally** — no API keys, no cloud:
+**Short answer: two different things happen.**
+
+| What | Uses Jan? | How |
+|------|-----------|-----|
+| Claude Code's own AI reasoning | No — Claude always uses Anthropic | That's the AI talking to you |
+| **Inspector skills (analyze, critic, fix...)** | **Yes — automatically** | Skills call Jan's API at `127.0.0.1:1337/v1` |
+| Jan's "Claude Code" experimental integration | Optional — redirects Claude Code itself to Jan | See setup below |
+
+### Option A — Inspector uses Jan (default, already works)
+
+When you run `python tools/run_inspector.py` and ask Claude to analyze code,
+the inspector calls your Jan model directly. No extra setup — just make sure
+Jan is running.
 
 ```bash
-# start the inspector server
+# 1. Copy and fill the env file
+cp .env.example .env
+# Set JAN_MODEL=Qwen3_5-9B-Uncensored-HauhauCS-Aggressive-Q4_K_M
+# (or whatever model you have loaded in Jan)
+
+# 2. Start the inspector
+python tools/run_inspector.py
+
+# 3. Ask Claude to run a skill — it calls Jan automatically
+# "Analyze this Python file for security issues"
+# "Give me a critic score for this code"
+```
+
+### Option B — Route Claude Code itself through Jan (experimental)
+
+Jan has a "Claude Code" integration under Settings → Integrations → Experimental.
+This makes Jan impersonate Anthropic's API so Claude Code uses your local model
+for its own reasoning:
+
+1. Open Jan → Settings → Integrations → Claude Code → Enable
+2. Jan gives you a local endpoint like `http://127.0.0.1:1337/v1`
+3. Set environment variable before starting Claude Code:
+   ```bash
+   ANTHROPIC_BASE_URL=http://127.0.0.1:1337/v1 claude .
+   ```
+4. Claude Code now sends its reasoning to your Jan model instead of Anthropic
+
+> **Note:** Option B means Claude Code thinks with your local Qwen3 model.
+> Quality depends on the model — it works but a 9B uncensored model is less
+> capable than Claude Sonnet for complex coding tasks.
+
+---
+
+## Local LLM inspector (Ollama + Jan)
+
+A second tool stack for running **all agents locally** — no API keys, no cloud.
+Works with **Jan only** (no Ollama needed).
+
+```bash
+# start the inspector server (Jan auto-detected, no config needed)
 python tools/run_inspector.py        # FastAPI on :8765
 
 # or run a one-off skill directly

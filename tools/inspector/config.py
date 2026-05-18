@@ -16,6 +16,8 @@ from dataclasses import dataclass, field
 
 OLLAMA_BASE    = os.environ.get("OLLAMA_BASE",    "http://localhost:11434")
 JAN_BASE       = os.environ.get("JAN_BASE",       "http://localhost:1337/v1")
+# Pin a specific Jan model by ID. If blank, the first model returned by Jan is used.
+JAN_MODEL      = os.environ.get("JAN_MODEL",       "")
 OLLAMA_TIMEOUT = int(os.environ.get("OLLAMA_TIMEOUT", "120"))
 SERVER_HOST    = os.environ.get("INSPECTOR_HOST",  "0.0.0.0")
 SERVER_PORT    = int(os.environ.get("INSPECTOR_PORT", "8765"))
@@ -79,6 +81,8 @@ class SkillDef:
 #   3. Output enforcement — "Start with `{`", exact schema, no preamble.
 #   4. Calibration anchors — concrete examples of what scores mean.
 #   5. Negative constraints — what NOT to do (avoids verbose hedging).
+#   6. /no_think prefix on fast roles — disables Qwen3 thinking mode for speed.
+#      Reasoning roles (architect, critic, fixer) keep thinking mode ON.
 
 SKILL_INDEX: dict[str, SkillDef] = {
 
@@ -88,6 +92,7 @@ SKILL_INDEX: dict[str, SkillDef] = {
         role="intent",
         output_format="json",
         system_prompt=(
+            "/no_think\n"  # Qwen3: skip thinking mode — fast classification, no reasoning needed
             "You are an intent classifier for a multi-agent code analysis system.\n"
             "Your job: determine what the user ACTUALLY needs, not just what they said.\n\n"
             "Analyse in this order:\n"
@@ -96,7 +101,7 @@ SKILL_INDEX: dict[str, SkillDef] = {
             "3. What complexity level? Count branches, abstractions, external deps.\n"
             "4. What obvious issues can you spot without deep analysis?\n"
             "5. What is the single highest-value next action for the user?\n\n"
-            "Start your response with `{` — no preamble, no explanation, no markdown.\n"
+            "Output ONLY valid JSON. Start with `{` — no preamble, no explanation, no markdown fences.\n"
             '{"primary_intent":"<build|fix|test|deploy|review|explain|data|unknown>",'
             '"domain":"<frontend|backend|fullstack|cli|api|data|ml|devops|config|other>",'
             '"language":"<detected language or mixed>",'
@@ -188,6 +193,7 @@ SKILL_INDEX: dict[str, SkillDef] = {
         role="summarizer",
         output_format="markdown",
         system_prompt=(
+            "/no_think\n"  # Qwen3: fast summarisation, no deep reasoning needed
             "You are a technical writer who values extreme brevity.\n"
             "Produce a summary with exactly these sections (omit if not applicable):\n"
             "**What it does** — 1-2 sentences, no fluff.\n"
@@ -195,7 +201,7 @@ SKILL_INDEX: dict[str, SkillDef] = {
             "**Dependencies** — external packages or services required.\n"
             "**Patterns** — notable design patterns, idioms, or non-obvious choices.\n"
             "**Watch out** — anything surprising, deprecated, or dangerous.\n\n"
-            "Be terse. Start directly with **What it does**. No intro sentence."
+            "Be terse. Start directly with **What it does**. No intro sentence. No commentary."
         ),
     ),
 
@@ -302,6 +308,7 @@ SKILL_INDEX: dict[str, SkillDef] = {
 class InspectorConfig:
     ollama_base: str = OLLAMA_BASE
     jan_base: str = JAN_BASE
+    jan_model: str = JAN_MODEL          # pinned Jan model ID; "" = auto-detect
     ollama_timeout: int = OLLAMA_TIMEOUT
     default_model: str = "mistral"      # fastest of user's installed models
     heartbeat_interval_s: int = 30
