@@ -17,6 +17,7 @@ from pathlib import Path
 
 from openclaw import __version__
 from openclaw.audit import AuditLog
+from openclaw.models import PRESETS, list_presets
 from openclaw.orchestrator import Orchestrator, RunConfig
 from openclaw.providers import get_provider
 from openclaw.tools import analyze_repo
@@ -108,8 +109,21 @@ def _emit_result(result, audit_out: str) -> None:
 
 # ── argparse wiring ─────────────────────────────────────────────────────────
 
+def _providers_cmd(args: argparse.Namespace) -> int:
+    print(f"{'name':<12}  {'default model':<40}  description")
+    print("-" * 100)
+    for name, preset in PRESETS.items():
+        default = preset.default_model
+        roles = f" (+{len(preset.role_models)} role overrides)" if preset.role_models else ""
+        print(f"{name:<12}  {default:<40}  {preset.description}{roles}")
+    print(f"\nSelect with:  --provider <name>   or   export OPENCLAW_PROVIDER=<name>")
+    print(f"Override one role's model:  export OPENCLAW_MODEL_<ROLE>=<model>   "
+          f"(e.g. OPENCLAW_MODEL_CRITIC=llama-3.1-8b-instant)")
+    return 0
+
+
 def _common_run_flags(p: argparse.ArgumentParser) -> None:
-    p.add_argument("--provider", choices=["anthropic", "openai", "mock"], default=None,
+    p.add_argument("--provider", choices=list(PRESETS.keys()), default=None,
                    help="LLM provider (default: from $OPENCLAW_PROVIDER or auto-detect)")
     p.add_argument("--model", default=None, help="Model name (default: from $OPENCLAW_MODEL or provider default)")
     p.add_argument("--iterations", "-i", type=int, default=3, help="Max critique loops (default: 3)")
@@ -162,6 +176,10 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--port", type=int, default=8000)
     s.add_argument("--reload", action="store_true")
     s.set_defaults(func=_serve_cmd)
+
+    # providers
+    pv = sub.add_parser("providers", help="List available LLM provider presets")
+    pv.set_defaults(func=_providers_cmd)
 
     return p
 

@@ -12,6 +12,7 @@ from fastapi.testclient import TestClient
 from openclaw import gates
 from openclaw.agents import classify_intent, critique, plan_architecture
 from openclaw.audit import AuditLog
+from openclaw.models import PRESETS
 from openclaw.orchestrator import Orchestrator, RunConfig
 from openclaw.providers import MockProvider, get_provider
 from openclaw.server import app
@@ -34,11 +35,74 @@ def test_mock_provider_intent_json() -> None:
 
 
 def test_get_provider_defaults_to_mock(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    for preset in PRESETS.values():
+        if preset.key_env:
+            monkeypatch.delenv(preset.key_env, raising=False)
     monkeypatch.delenv("OPENCLAW_PROVIDER", raising=False)
     p = get_provider()
     assert p.name == "mock"
+
+
+def test_get_provider_auto_detects_openrouter_first(monkeypatch: pytest.MonkeyPatch) -> None:
+    """OpenRouter is the highest-priority auto-detect (free tier, high-end models)."""
+    for preset in PRESETS.values():
+        if preset.key_env:
+            monkeypatch.delenv(preset.key_env, raising=False)
+    monkeypatch.delenv("OPENCLAW_PROVIDER", raising=False)
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-test")
+    monkeypatch.setenv("NVIDIA_NIM_API_KEY", "nvapi-test")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    # OpenRouter declared first in PRESETS → wins
+    p = get_provider()
+    assert p.name == "openrouter"
+
+
+def test_get_provider_nvidia(monkeypatch: pytest.MonkeyPatch) -> None:
+    for preset in PRESETS.values():
+        if preset.key_env:
+            monkeypatch.delenv(preset.key_env, raising=False)
+    monkeypatch.setenv("NVIDIA_NIM_API_KEY", "nvapi-test")
+    p = get_provider("nvidia")
+    assert p.name == "nvidia"
+    assert "nemotron" in p.model_for("architect").lower() or "70b" in p.model_for("architect").lower()
+
+
+def test_role_routing_uses_role_specific_model(monkeypatch: pytest.MonkeyPatch) -> None:
+    for preset in PRESETS.values():
+        if preset.key_env:
+            monkeypatch.delenv(preset.key_env, raising=False)
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-test")
+    p = get_provider("openrouter")
+    # critic differs from default — even if both are high-end, the routing fires
+    assert p.model_for("critic")
+    assert p.model_for("intent")
+    assert p.model_for("coder")
+
+
+def test_role_model_env_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-test")
+    monkeypatch.setenv("OPENCLAW_MODEL_CRITIC", "anthropic/claude-3.5-haiku")
+    p = get_provider("openrouter")
+    assert p.model_for("critic") == "anthropic/claude-3.5-haiku"
+
+
+def test_unknown_provider_raises() -> None:
+    with pytest.raises(ValueError):
+        get_provider("not-a-real-provider")
+
+
+def test_all_presets_have_required_fields() -> None:
+    for name, preset in PRESETS.items():
+        assert preset.kind in ("anthropic", "openai_compatible", "mock"), name
+        assert preset.default_model, name
+        if preset.kind == "openai_compatible":
+            assert preset.base_url, name
+
+
+def test_mock_provider_model_for_returns_default() -> None:
+    p = MockProvider()
+    assert p.model_for("critic") == "mock-1"
+    assert p.model_for(None) == "mock-1"
 
 
 # ── agents ──────────────────────────────────────────────────────────────────

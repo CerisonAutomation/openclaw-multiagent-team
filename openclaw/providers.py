@@ -1,25 +1,21 @@
-"""Universal LLM provider — Anthropic + any OpenAI-compatible endpoint.
+"""Universal LLM provider — Anthropic + any OpenAI-compatible endpoint, with
+per-role model routing.
 
-OpenAI-compatible includes: OpenAI, NVIDIA NIM, OpenRouter, DeepSeek, Together,
-Groq, Fireworks, vLLM, Ollama (with /v1), and most self-hosted gateways. Set
-`OPENCLAW_PROVIDER` and the corresponding env vars below.
+    # Pick a provider by name; the preset knows the URL, key var, and which
+    # model to use for which agent role (intent/critic on cheap, coder on smart).
+    export OPENCLAW_PROVIDER=groq
+    export GROQ_API_KEY=...
+    openclaw build "..."
 
-    export OPENCLAW_PROVIDER=anthropic
-    export ANTHROPIC_API_KEY=sk-ant-...
-    export OPENCLAW_MODEL=claude-sonnet-4-20250514          # optional
+    # Override a single role's model:
+    export OPENCLAW_MODEL_CRITIC=llama-3.1-8b-instant
+    export OPENCLAW_MODEL_CODER=llama-3.3-70b-versatile
 
-    export OPENCLAW_PROVIDER=openai
-    export OPENAI_API_KEY=sk-...
-    export OPENAI_BASE_URL=https://api.openai.com/v1        # or any compatible URL
-    export OPENCLAW_MODEL=gpt-4o-mini                       # optional
+    # Or pin a single model for every role:
+    export OPENCLAW_MODEL=llama-3.3-70b-versatile
 
-    export OPENCLAW_PROVIDER=mock                           # dry-run, no API key needed
-
-Routing OpenAI-compatible providers:
-    export OPENCLAW_PROVIDER=openai
-    export OPENAI_BASE_URL=https://openrouter.ai/api/v1
-    export OPENAI_API_KEY=$OPENROUTER_API_KEY
-    export OPENCLAW_MODEL=anthropic/claude-3.5-sonnet
+    # Dry-run with zero credentials:
+    export OPENCLAW_PROVIDER=mock
 """
 
 from __future__ import annotations
@@ -29,24 +25,36 @@ import os
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
+from openclaw.models import PRESETS, ProviderPreset
+
 
 class Provider(Protocol):
     name: str
     model: str
 
-    def chat(self, system: str, user: str, max_tokens: int = 2000, temperature: float = 0.7) -> str: ...
+    def chat(self, system: str, user: str, max_tokens: int = 2000,
+             temperature: float = 0.7, role: str | None = None) -> str: ...
 
-    def json(self, system: str, user: str, max_tokens: int = 1500) -> dict: ...
+    def json(self, system: str, user: str, max_tokens: int = 1500,
+             role: str | None = None) -> dict: ...
+
+    def model_for(self, role: str | None) -> str: ...
 
 
 def _strip_json_fences(raw: str) -> str:
     raw = raw.strip()
     if raw.startswith("```"):
-        # remove leading ```json or ```
         raw = raw.split("\n", 1)[-1] if "\n" in raw else raw[3:]
     if raw.endswith("```"):
         raw = raw.rsplit("```", 1)[0]
     return raw.strip()
+
+
+def _role_env_override(role: str | None) -> str | None:
+    """OPENCLAW_MODEL_CRITIC, OPENCLAW_MODEL_CODER, etc."""
+    if not role:
+        return None
+    return os.environ.get(f"OPENCLAW_MODEL_{role.upper()}")
 
 
 @dataclass
@@ -54,6 +62,7 @@ class AnthropicProvider:
     name: str = "anthropic"
     model: str = "claude-sonnet-4-20250514"
     api_key: str = field(default_factory=lambda: os.environ.get("ANTHROPIC_API_KEY", ""))
+    role_models: dict[str, str] = field(default_factory=dict)
     _client: Any = None
 
     def __post_init__(self) -> None:
@@ -65,9 +74,13 @@ class AnthropicProvider:
             raise RuntimeError("anthropic SDK not installed. Run: pip install anthropic") from e
         self._client = anthropic.Anthropic(api_key=self.api_key)
 
-    def chat(self, system: str, user: str, max_tokens: int = 2000, temperature: float = 0.7) -> str:
+    def model_for(self, role: str | None) -> str:
+        return _role_env_override(role) or self.role_models.get(role or "", self.model)
+
+    def chat(self, system: str, user: str, max_tokens: int = 2000,
+             temperature: float = 0.7, role: str | None = None) -> str:
         msg = self._client.messages.create(
-            model=self.model,
+            model=self.model_for(role),
             max_tokens=max_tokens,
             temperature=temperature,
             system=system,
@@ -75,8 +88,11 @@ class AnthropicProvider:
         )
         return msg.content[0].text
 
-    def json(self, system: str, user: str, max_tokens: int = 1500) -> dict:
-        raw = self.chat(system + "\n\nRespond ONLY with valid JSON. No prose, no markdown.", user, max_tokens, 0.2)
+    def json(self, system: str, user: str, max_tokens: int = 1500, role: str | None = None) -> dict:
+        raw = self.chat(
+            system + "\n\nRespond ONLY with valid JSON. No prose, no markdown.",
+            user, max_tokens, 0.2, role=role,
+        )
         try:
             return json.loads(_strip_json_fences(raw))
         except json.JSONDecodeError:
@@ -91,20 +107,25 @@ class OpenAIProvider:
     model: str = field(default_factory=lambda: os.environ.get("OPENCLAW_MODEL", "gpt-4o-mini"))
     api_key: str = field(default_factory=lambda: os.environ.get("OPENAI_API_KEY", ""))
     base_url: str = field(default_factory=lambda: os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1"))
+    role_models: dict[str, str] = field(default_factory=dict)
     _client: Any = None
 
     def __post_init__(self) -> None:
         if not self.api_key:
-            raise RuntimeError("OPENAI_API_KEY is not set")
+            raise RuntimeError(f"API key not set (expected env var for provider '{self.name}')")
         try:
             from openai import OpenAI
         except ImportError as e:
             raise RuntimeError("openai SDK not installed. Run: pip install openai") from e
         self._client = OpenAI(api_key=self.api_key, base_url=self.base_url)
 
-    def chat(self, system: str, user: str, max_tokens: int = 2000, temperature: float = 0.7) -> str:
+    def model_for(self, role: str | None) -> str:
+        return _role_env_override(role) or self.role_models.get(role or "", self.model)
+
+    def chat(self, system: str, user: str, max_tokens: int = 2000,
+             temperature: float = 0.7, role: str | None = None) -> str:
         resp = self._client.chat.completions.create(
-            model=self.model,
+            model=self.model_for(role),
             max_tokens=max_tokens,
             temperature=temperature,
             messages=[
@@ -114,8 +135,11 @@ class OpenAIProvider:
         )
         return resp.choices[0].message.content or ""
 
-    def json(self, system: str, user: str, max_tokens: int = 1500) -> dict:
-        raw = self.chat(system + "\n\nRespond ONLY with valid JSON. No prose, no markdown.", user, max_tokens, 0.2)
+    def json(self, system: str, user: str, max_tokens: int = 1500, role: str | None = None) -> dict:
+        raw = self.chat(
+            system + "\n\nRespond ONLY with valid JSON. No prose, no markdown.",
+            user, max_tokens, 0.2, role=role,
+        )
         try:
             return json.loads(_strip_json_fences(raw))
         except json.JSONDecodeError:
@@ -128,8 +152,13 @@ class MockProvider:
 
     name: str = "mock"
     model: str = "mock-1"
+    role_models: dict[str, str] = field(default_factory=dict)
 
-    def chat(self, system: str, user: str, max_tokens: int = 2000, temperature: float = 0.7) -> str:
+    def model_for(self, role: str | None) -> str:
+        return self.role_models.get(role or "", self.model)
+
+    def chat(self, system: str, user: str, max_tokens: int = 2000,
+             temperature: float = 0.7, role: str | None = None) -> str:
         head = user.splitlines()[0][:80] if user else ""
         return (
             f"[MOCK] Task: {head}\n\n"
@@ -139,8 +168,7 @@ class MockProvider:
             "SEAL: mock output produced. Next step: replace MockProvider with a real LLM."
         )
 
-    def json(self, system: str, user: str, max_tokens: int = 1500) -> dict:
-        # Order matters — match the most specific role first.
+    def json(self, system: str, user: str, max_tokens: int = 1500, role: str | None = None) -> dict:
         sl = system.lower()
         if "senior software architect" in sl or "files_to_create" in sl:
             return {
@@ -201,33 +229,61 @@ class MockProvider:
         return {"_mock": True}
 
 
-def get_provider(name: str | None = None, model: str | None = None) -> Provider:
-    """Resolve a provider from env or explicit args.
+def _from_preset(name: str, preset: ProviderPreset, model_override: str | None) -> Provider:
+    """Construct the right provider class from a preset entry."""
+    if preset.kind == "mock":
+        p = MockProvider()
+    elif preset.kind == "anthropic":
+        key = os.environ.get(preset.key_env, "")
+        if not key:
+            raise RuntimeError(f"{preset.key_env} is not set (required for provider '{name}')")
+        p = AnthropicProvider(name=name, api_key=key, model=preset.default_model,
+                              role_models=dict(preset.role_models))
+    elif preset.kind == "openai_compatible":
+        key = os.environ.get(preset.key_env, "")
+        if not key:
+            # Special-case ollama: any non-empty value works
+            if name == "ollama":
+                key = "ollama"
+            else:
+                raise RuntimeError(f"{preset.key_env} is not set (required for provider '{name}')")
+        p = OpenAIProvider(
+            name=name, api_key=key, base_url=preset.base_url or "https://api.openai.com/v1",
+            model=preset.default_model, role_models=dict(preset.role_models),
+        )
+    else:
+        raise ValueError(f"Unknown preset kind: {preset.kind!r}")
 
-    Precedence: explicit `name` arg > $OPENCLAW_PROVIDER > anthropic (if key set) >
-    openai (if key set) > mock.
+    # Apply explicit model override (pins all roles to the same model)
+    if model_override:
+        p.model = model_override
+        p.role_models = {}   # explicit override beats role routing
+    return p
+
+
+def get_provider(name: str | None = None, model: str | None = None) -> Provider:
+    """Resolve a provider from a preset name or auto-detect.
+
+    Precedence: explicit `name` arg > $OPENCLAW_PROVIDER > first preset whose
+    key env var is set > mock.
     """
     chosen = (name or os.environ.get("OPENCLAW_PROVIDER", "")).lower().strip()
-    if not chosen:
-        if os.environ.get("ANTHROPIC_API_KEY"):
-            chosen = "anthropic"
-        elif os.environ.get("OPENAI_API_KEY"):
-            chosen = "openai"
-        else:
-            chosen = "mock"
-
     explicit_model = model or os.environ.get("OPENCLAW_MODEL")
 
-    if chosen == "anthropic":
-        p = AnthropicProvider()
-        if explicit_model:
-            p.model = explicit_model
-        return p
-    if chosen == "openai":
-        p = OpenAIProvider()
-        if explicit_model:
-            p.model = explicit_model
-        return p
-    if chosen == "mock":
-        return MockProvider()
-    raise ValueError(f"Unknown OPENCLAW_PROVIDER: {chosen!r}. Use anthropic|openai|mock.")
+    if not chosen:
+        # Auto-detect: pick the first preset whose key env var is populated
+        for preset_name, preset in PRESETS.items():
+            if preset.kind == "mock":
+                continue
+            if preset.key_env and os.environ.get(preset.key_env):
+                chosen = preset_name
+                break
+        if not chosen:
+            chosen = "mock"
+
+    if chosen not in PRESETS:
+        raise ValueError(
+            f"Unknown provider: {chosen!r}. "
+            f"Available: {', '.join(PRESETS.keys())}"
+        )
+    return _from_preset(chosen, PRESETS[chosen], explicit_model)

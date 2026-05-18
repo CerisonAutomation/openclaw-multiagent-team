@@ -92,7 +92,7 @@ REGISTRY: dict[str, AgentSpec] = {
 def classify_intent(provider: Provider, task: str, audit: AuditLog | None = None) -> dict:
     if audit:
         audit.fire("intent")
-    data = provider.json(prompts.INTENT_CLASSIFIER, task)
+    data = provider.json(prompts.INTENT_CLASSIFIER, task, role="intent")
     if data.get("_parse_error"):
         data = {
             "primary_intent": "build",
@@ -112,7 +112,7 @@ def plan_architecture(provider: Provider, intent: dict, audit: AuditLog | None =
     if audit:
         audit.fire("architect")
     user = json.dumps(intent, indent=2)
-    return provider.json(prompts.ARCHITECT, user, max_tokens=1500)
+    return provider.json(prompts.ARCHITECT, user, max_tokens=1500, role="architect")
 
 
 def write_one_file(provider: Provider, file_spec: dict, architecture: dict, audit: AuditLog | None = None) -> str:
@@ -122,34 +122,34 @@ def write_one_file(provider: Provider, file_spec: dict, architecture: dict, audi
         f"Architecture context:\n{json.dumps(architecture, indent=2)}\n\n"
         f"File to write:\n  path: {file_spec['path']}\n  purpose: {file_spec.get('purpose', '')}"
     )
-    raw = provider.chat(prompts.CODER, ctx, max_tokens=2500, temperature=0.3)
+    raw = provider.chat(prompts.CODER, ctx, max_tokens=2500, temperature=0.3, role="coder")
     return _strip_fences(raw)
 
 
 def plan_verification(provider: Provider, architecture: dict, audit: AuditLog | None = None) -> dict:
     if audit:
         audit.fire("tester")
-    return provider.json(prompts.TESTER, json.dumps(architecture, indent=2))
+    return provider.json(prompts.TESTER, json.dumps(architecture, indent=2), role="tester")
 
 
 def diagnose_failure(provider: Provider, cmd: str, output: str, audit: AuditLog | None = None) -> dict:
     if audit:
         audit.fire("fixer")
     user = f"Failed command:\n  {cmd}\n\nOutput:\n{output[-2000:]}"
-    return provider.json(prompts.FIXER, user, max_tokens=2500)
+    return provider.json(prompts.FIXER, user, max_tokens=2500, role="fixer")
 
 
 def plan_deploy(provider: Provider, architecture: dict, audit: AuditLog | None = None) -> dict:
     if audit:
         audit.fire("deployer")
-    return provider.json(prompts.DEPLOYER, json.dumps(architecture, indent=2))
+    return provider.json(prompts.DEPLOYER, json.dumps(architecture, indent=2), role="deployer")
 
 
 def critique(provider: Provider, task: str, output: str, audit: AuditLog | None = None) -> dict:
     if audit:
         audit.fire("critic")
     user = f"ORIGINAL TASK:\n{task}\n\nARTIFACT TO EVALUATE:\n{output[:6000]}"
-    scores = provider.json(prompts.CRITIC, user)
+    scores = provider.json(prompts.CRITIC, user, role="critic")
     if scores.get("_parse_error"):
         scores = {
             "clarity": 6.5, "structure": 6.5, "completeness": 6.0, "accuracy": 6.5,
