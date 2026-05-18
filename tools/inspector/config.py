@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 
 
 OLLAMA_BASE = os.environ.get("OLLAMA_BASE", "http://localhost:11434")
+JAN_BASE = os.environ.get("JAN_BASE", "http://localhost:1337/v1")
 OLLAMA_TIMEOUT = int(os.environ.get("OLLAMA_TIMEOUT", "120"))
 SERVER_HOST = os.environ.get("INSPECTOR_HOST", "0.0.0.0")
 SERVER_PORT = int(os.environ.get("INSPECTOR_PORT", "8765"))
@@ -228,6 +229,7 @@ SKILL_INDEX: dict[str, SkillDef] = {
 @dataclass
 class InspectorConfig:
     ollama_base: str = OLLAMA_BASE
+    jan_base: str = JAN_BASE
     ollama_timeout: int = OLLAMA_TIMEOUT
     default_model: str = "llama3.2"
     heartbeat_interval_s: int = 30

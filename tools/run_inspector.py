@@ -977,6 +977,181 @@ async def loop_plan(req: LoopPlanRequest):
     }
 
 
+# ── relay agent ──────────────────────────────────────────────────────────────
+
+_INTENT_TOOL_MAP: dict[str, list[tuple[str,str]]] = {
+    "review":  [("skill","summarize"),("skill","critic"),("code","metrics")],
+    "fix":     [("skill","fix"),("skill","security")],
+    "test":    [("skill","test_gen")],
+    "build":   [("skill","arch_review"),("skill","summarize")],
+    "deploy":  [("skill","arch_review"),("skill","security")],
+    "explain": [("skill","summarize"),("code","metrics")],
+    "data":    [("skill","critic"),("code","metrics")],
+    "unknown": [("skill","summarize"),("code","metrics")],
+}
+_SECURITY_DOMAINS = {"backend","fullstack","api","devops"}
+
+
+def _relay_select_tools(intent: dict, has_source: bool) -> list[tuple[str,str]]:
+    if not has_source:
+        return []
+    primary = intent.get("primary_intent","unknown")
+    domain  = intent.get("domain","other")
+    lang    = intent.get("language","unknown")
+    base = list(_INTENT_TOOL_MAP.get(primary, _INTENT_TOOL_MAP["unknown"]))
+    base.append(("code","secrets"))
+    if domain in _SECURITY_DOMAINS and ("skill","security") not in base:
+        base.append(("skill","security"))
+    if lang == "python":
+        base += [("code","lint"),("code","ast")]
+    seen: set = set(); result = []
+    for item in base:
+        if item not in seen:
+            seen.add(item); result.append(item)
+    return result
+
+
+def _relay_code_tool(name: str, source: str, intent: dict) -> Any:
+    lang = intent.get("language","unknown")
+    if name == "metrics":  return compute_metrics(source, lang)
+    if name == "secrets":
+        return [{"pattern":h.pattern_name,"line":h.line,"snippet":h.snippet,"severity":h.severity}
+                for h in scan_secrets(source)]
+    if name == "lint":
+        r = lint_python(source); return r.data if r.ok else {"error":r.error}
+    if name == "ast":
+        return analyze_python_ast(source).to_dict()
+    return {"error":f"unknown:{name}"}
+
+
+def _relay_synthesize(user_input: str, intent: dict, outputs: dict) -> str:
+    parts = []
+    primary=intent.get("primary_intent","?"); domain=intent.get("domain","?")
+    lang=intent.get("language","?"); complexity=intent.get("complexity","?")
+    goal=intent.get("stated_goal","")
+    parts.append(f"**{primary.upper()} · {domain} · {lang} · {complexity}**" + (f"\n_{goal}_" if goal else ""))
+    issues=intent.get("issues_spotted",[])
+    if issues: parts.append("**Issues:** " + " · ".join(f"`{i}`" for i in issues[:5]))
+    if "metrics" in outputs:
+        m=outputs["metrics"]
+        parts.append(f"**Metrics:** {m.get('lines_code','?')} lines · {m.get('bytes',0):,}B · CC {m.get('cyclomatic_avg','?')} · SHA {str(m.get('sha256',''))[:8]}")
+        if m.get("todo_markers",0): parts.append(f"  ⚠ {m['todo_markers']} TODO/FIXME")
+    if "secrets" in outputs:
+        hits=outputs["secrets"]
+        if hits: parts.append(f"**🔴 Secrets ({len(hits)}):** " + "; ".join(f"`{h['pattern']}` L{h['line']}" for h in hits[:4]))
+        else: parts.append("**Secrets:** ✓ clean")
+    if "lint" in outputs:
+        ln=outputs["lint"]
+        if "error" in ln: parts.append(f"**Lint:** error — {ln['error']}")
+        elif ln.get("issue_count",0)==0: parts.append("**Lint:** ✓ 0 issues")
+        else: parts.append(f"**Lint:** {ln['issue_count']} issue(s) — " + " · ".join(f"`{i['code']}` L{i['line']}" for i in ln.get("issues",[])[:3]))
+    if "ast" in outputs:
+        a=outputs["ast"]
+        if not a.get("parse_error"):
+            parts.append(f"**AST:** {len(a.get('functions',[]))} fn · {len(a.get('classes',[]))} cls · CC={a.get('cyclomatic_complexity','?')} · depth={a.get('max_depth','?')}")
+    _LABELS={"summarize":"Summary","critic":"Critique","fix":"Fix","security":"Security","test_gen":"Tests","arch_review":"Architecture"}
+    for skill,label in _LABELS.items():
+        if skill not in outputs: continue
+        out=outputs[skill]
+        if isinstance(out,dict):
+            if "error" in out: parts.append(f"**{label}:** ✗ {out['error'][:120]}")
+            elif skill=="critic":
+                dims={k:v for k,v in out.items() if isinstance(v,(int,float))}
+                avg=round(sum(dims.values())/len(dims),1) if dims else "?"
+                parts.append(f"**Critique:** avg={avg}/10 · worst={out.get('lowest_dimension','?')}" + (f"\n  → _{out.get('critical_fix','')}_" if out.get("critical_fix") else ""))
+            elif skill=="fix": parts.append(f"**Fix ({out.get('confidence','?')}):** {out.get('diagnosis','')}")
+            elif skill=="security":
+                risk=out.get("risk_level","?")
+                emoji={"critical":"🔴","high":"🟠","medium":"🟡","low":"🟢","none":"✓"}.get(risk,"?")
+                parts.append(f"**Security:** {emoji} {risk.upper()}" + (f" · {len(out.get('vulnerabilities',[]))} vuln(s)" if out.get("vulnerabilities") else ""))
+            elif skill=="arch_review": parts.append(f"**Architecture:** {out.get('overall_rating','?')}/10" + (f"\n  → _{out.get('top_priority_fix','')}_" if out.get("top_priority_fix") else ""))
+            else: parts.append(f"**{label}:** {str(out)[:300]}")
+        elif isinstance(out,str): parts.append(f"**{label}:**\n{out.strip()[:600]}")
+    next_action=intent.get("recommended_next","")
+    if next_action: parts.append(f"**Recommended next:** _{next_action}_")
+    return "\n\n".join(parts)
+
+
+_RELAY_MAX_HISTORY = 10
+
+@dataclass
+class _RelayMsg:
+    role: str
+    content: str
+    tools_used: list[str] = field(default_factory=list)
+    ts: float = field(default_factory=time.time)
+
+
+class _RelayAgent:
+    def __init__(self) -> None:
+        self._history: list[_RelayMsg] = []
+
+    async def handle(self, user_input: str, source: str = "", model: str | None = None) -> dict:
+        t0 = time.time()
+        intent_src = f"{user_input}\n\n---\n{source}" if source else user_input
+        intent_result = await skill_index.run("intent", intent_src, model=model)
+        intent = intent_result.output if isinstance(intent_result.output, dict) else {}
+        selected = _relay_select_tools(intent, bool(source.strip()))
+        tool_outputs: dict[str, Any] = {}
+        skill_tasks: dict[str, Any] = {}
+        for tt, name in selected:
+            if tt == "code":
+                tool_outputs[name] = await asyncio.to_thread(_relay_code_tool, name, source, intent)
+            else:
+                skill_tasks[name] = asyncio.create_task(skill_index.run(name, source or user_input, model=model))
+        if skill_tasks:
+            results = await asyncio.gather(*skill_tasks.values(), return_exceptions=True)
+            for sname, r in zip(skill_tasks.keys(), results):
+                if isinstance(r, Exception): tool_outputs[sname] = {"error": str(r)}
+                else: tool_outputs[sname] = r.output if r.ok else {"error": r.error}
+        message = _relay_synthesize(user_input, intent, tool_outputs)
+        latency_ms = round((time.time() - t0) * 1000, 1)
+        tools_used = [f"{tt}:{n}" for tt, n in selected]
+        self._history.append(_RelayMsg("user", user_input))
+        self._history.append(_RelayMsg("assistant", message, tools_used))
+        if len(self._history) > _RELAY_MAX_HISTORY * 2:
+            self._history = self._history[-_RELAY_MAX_HISTORY * 2:]
+        return {"message": message, "intent": intent, "tools_used": tools_used,
+                "tool_outputs": tool_outputs, "model": intent_result.model_used,
+                "provider": "ollama", "latency_ms": latency_ms}
+
+    def history(self) -> list[dict]:
+        return [{"role": m.role, "content": m.content, "tools": m.tools_used, "ts": m.ts} for m in self._history]
+
+    def clear(self) -> None:
+        self._history.clear()
+
+
+_relay_sessions: dict[str, _RelayAgent] = {}
+
+
+class RelayRequest(BaseModel):
+    message: str
+    source: str = ""
+    session_id: str = "default"
+    model: str | None = None
+
+
+@app.post("/api/relay")
+async def relay(req: RelayRequest):
+    """Classify intent, auto-select tools, execute concurrently, synthesize response."""
+    if req.session_id not in _relay_sessions:
+        _relay_sessions[req.session_id] = _RelayAgent()
+    return await _relay_sessions[req.session_id].handle(req.message, req.source, req.model)
+
+
+@app.get("/api/relay/history/{session_id}")
+async def relay_history(session_id: str):
+    agent = _relay_sessions.get(session_id)
+    return {"session_id": session_id, "history": agent.history() if agent else []}
+
+
+@app.delete("/api/relay/history/{session_id}")
+async def relay_clear(session_id: str):
+    agent = _relay_sessions.pop(session_id, None)
+    return {"cleared": session_id, "existed": agent is not None}
+
+
 # ── scheduler ─────────────────────────────────────────────────────────────────
 
 @app.get("/api/schedule")

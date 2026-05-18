@@ -23,6 +23,7 @@ from pydantic import BaseModel, Field
 
 from .agents import SkillResult, skill_index
 from .config import SKILL_INDEX, get_config
+from .relay import RelayAgent
 from .scheduler import Event, FileWatcher, bus, heartbeat, scheduler
 from .tools import (
     analyze_repo,
@@ -143,8 +144,7 @@ async def list_models():
 
 async def _jan_status() -> dict[str, Any]:
     import httpx as _httpx
-    jan_base = get_config().ollama_base.replace("11434", "1337").replace("/v1", "") + "/v1"
-    jan_base = "http://localhost:1337/v1"
+    jan_base = get_config().jan_base
     try:
         async with _httpx.AsyncClient(timeout=3) as c:
             r = await c.get(f"{jan_base}/models")
@@ -159,9 +159,10 @@ async def _jan_status() -> dict[str, Any]:
 
 async def _jan_models() -> list[dict]:
     import httpx as _httpx
+    jan_base = get_config().jan_base
     try:
         async with _httpx.AsyncClient(timeout=3) as c:
-            r = await c.get("http://localhost:1337/v1/models")
+            r = await c.get(f"{jan_base}/models")
             if r.status_code == 200:
                 return r.json().get("data", [])
     except Exception:
@@ -173,6 +174,7 @@ async def _jan_generate(prompt: str, system: str, model: str,
                         temperature: float, max_tokens: int) -> str:
     """OpenAI-compatible chat call to Jan."""
     import httpx as _httpx
+    cfg = get_config()
     messages = []
     if system:
         messages.append({"role": "system", "content": system})
@@ -184,8 +186,8 @@ async def _jan_generate(prompt: str, system: str, model: str,
         "max_tokens": max_tokens,
         "stream": False,
     }
-    async with _httpx.AsyncClient(timeout=get_config().ollama_timeout) as c:
-        r = await c.post("http://localhost:1337/v1/chat/completions", json=payload)
+    async with _httpx.AsyncClient(timeout=cfg.ollama_timeout) as c:
+        r = await c.post(f"{cfg.jan_base}/chat/completions", json=payload)
         r.raise_for_status()
         return r.json()["choices"][0]["message"]["content"]
 
@@ -387,6 +389,56 @@ async def loop_plan(req: LoopPlanRequest):
             f"--max-iter {result.output.get('recommended_max_iter', 20) if isinstance(result.output, dict) else 20}"
         ),
     }
+
+
+# ── Routes: relay agent ───────────────────────────────────────────────────────
+
+# One RelayAgent per session_id; sessions are in-memory (evicted on restart).
+_relay_sessions: dict[str, RelayAgent] = {}
+
+
+class RelayRequest(BaseModel):
+    message: str                   # natural language input from the user
+    source: str = ""               # optional code / text to analyse
+    session_id: str = "default"    # keep history across calls with the same id
+    model: str | None = None       # override model (None = auto-select)
+
+
+@app.post("/api/relay")
+async def relay(req: RelayRequest):
+    """
+    Unified entry point — classify intent, auto-select tools, execute, synthesize.
+
+    The relay agent sits between the user and every tool/skill:
+      1. Runs the `intent` skill to understand what the user wants.
+      2. Selects code-analysis tools (metrics, secrets, lint, AST) and LLM skills.
+      3. Executes them concurrently where possible.
+      4. Returns a structured response with per-tool outputs and a synthesized message.
+
+    Use `session_id` to maintain conversation history across multiple calls.
+    """
+    if req.session_id not in _relay_sessions:
+        _relay_sessions[req.session_id] = RelayAgent(skill_index)
+
+    agent = _relay_sessions[req.session_id]
+    result = await agent.handle(req.message, source=req.source, model=req.model)
+    return result.to_dict()
+
+
+@app.get("/api/relay/history/{session_id}")
+async def relay_history(session_id: str):
+    """Return the message history for a relay session."""
+    agent = _relay_sessions.get(session_id)
+    if agent is None:
+        return {"session_id": session_id, "history": []}
+    return {"session_id": session_id, "history": agent.history()}
+
+
+@app.delete("/api/relay/history/{session_id}")
+async def relay_clear_history(session_id: str):
+    """Clear the message history for a relay session."""
+    agent = _relay_sessions.pop(session_id, None)
+    return {"cleared": session_id, "existed": agent is not None}
 
 
 # ── Routes: scheduler ─────────────────────────────────────────────────────────

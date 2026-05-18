@@ -184,6 +184,7 @@ class SkillResult:
     raw: str             # raw LLM output
     ok: bool = True
     error: str = ""
+    provider: str = "ollama"  # "ollama" | "jan" | "none"
 
 
 class SkillIndex:
