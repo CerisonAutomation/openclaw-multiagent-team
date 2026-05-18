@@ -1,0 +1,24 @@
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+.env
+
+# openclaw artifacts
+openclaw_workspace/
+.openclaw_audits/
+openclaw_audit.json
+build_audit.json
+fix_audit.json
+deploy_audit.json
+build_out/
+
+# editor
+.vscode/
+.idea/
+.DS_Store
