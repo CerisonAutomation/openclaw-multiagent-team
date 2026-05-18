@@ -363,6 +363,34 @@ async def chat(req: ChatRequest):
     return {"content": content, "provider": "ollama"}
 
 
+# ── Routes: loop planner ──────────────────────────────────────────────────────
+
+class LoopPlanRequest(BaseModel):
+    task: str
+    criteria: str = ""
+    model: str | None = None
+
+
+@app.post("/api/loop/plan")
+async def loop_plan(req: LoopPlanRequest):
+    """Run the loop_runner skill to produce a bounded-loop specification."""
+    source = req.task
+    if req.criteria:
+        source = f"Task: {req.task}\n\nAcceptance criteria: {req.criteria}"
+    result = await skill_index.run("loop_runner", source, model=req.model)
+    if not result.ok:
+        raise HTTPException(status_code=500, detail=result.error)
+    return {
+        "plan": result.output,
+        "model": result.model_used,
+        "cli_hint": (
+            f"python tools/loop.py --task \"{req.task}\" "
+            f"--promise {result.output.get('completion_token', 'LOOP_DONE') if isinstance(result.output, dict) else 'LOOP_DONE'} "
+            f"--max-iter {result.output.get('recommended_max_iter', 20) if isinstance(result.output, dict) else 20}"
+        ),
+    }
+
+
 # ── Routes: scheduler ─────────────────────────────────────────────────────────
 
 @app.get("/api/schedule")

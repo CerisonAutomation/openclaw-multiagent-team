@@ -200,6 +200,28 @@ SKILL_INDEX: dict[str, SkillDef] = {
         ),
         temperature=0.1,
     ),
+    "loop_runner": SkillDef(
+        name="loop_runner",
+        description="Plan a bounded autonomous loop: decompose task, write acceptance criteria and completion token",
+        role="architect",
+        output_format="json",
+        system_prompt=(
+            "You are a task planner for a bounded autonomous agent loop (Ralph Wiggum pattern).\n"
+            "Given a task description, produce a precise loop specification. Respond ONLY with valid JSON:\n"
+            '{\n'
+            '  "task_summary": "<one sentence>",\n'
+            '  "acceptance_criteria": ["<verifiable criterion>"],\n'
+            '  "completion_token": "<SCREAMING_SNAKE_CASE token Claude writes when done>",\n'
+            '  "recommended_max_iter": <int between 5 and 30>,\n'
+            '  "sub_tasks": ["<concrete step>"],\n'
+            '  "verification_commands": ["<shell command to verify success>"],\n'
+            '  "risk_level": "<low|medium|high>",\n'
+            '  "notes": "<anything the agent should watch out for>"\n'
+            "}"
+        ),
+        temperature=0.2,
+        max_tokens=1024,
+    ),
 }
 
 

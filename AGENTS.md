@@ -233,6 +233,87 @@ open tools/inspector.html        # or http://localhost:8765/
 
 ---
 
+---
+
+## Ralph Wiggum Loop — Autonomous Bounded Iteration
+
+The loop is a control system: **model → tools → evaluate → continue/stop**, with a stop hook and a max-iteration cap preventing runaway execution.
+
+### How it works
+
+```
+task + criteria + max_iter
+        │
+        ▼
+  [Claude plans → edits → runs tools]
+        │
+        ▼
+  [Stop hook fires (.claude/hooks/stop_check.py)]
+        │
+  promise token in .loop_done? ──yes──▶ exit cleanly
+        │
+        no
+        │
+  max_iter reached? ──yes──▶ exit with warning
+        │
+        no
+        │
+  reinject "keep working" message ──▶ back to Claude
+```
+
+### Files
+
+| File | What it does |
+|---|---|
+| `.claude/settings.json` | Registers the Stop hook |
+| `.claude/hooks/stop_check.py` | Idempotent gate: checks promise, increments counter, blocks or allows stop |
+| `tools/loop.py` | CLI runner: sets env vars, invokes `claude --print`, reports result |
+
+### Quick start
+
+```bash
+# Plan a loop (uses loop_runner skill via the API)
+curl -X POST http://localhost:8765/api/loop/plan \
+  -H "Content-Type: application/json" \
+  -d '{"task": "Fix all failing tests", "criteria": "pytest exits 0"}'
+
+# Run a loop directly
+python tools/loop.py "Fix all failing tests" \
+  --criteria "pytest exits 0 with no errors" \
+  --promise ALL_TESTS_PASS \
+  --max-iter 15
+
+# Dry-run (shows command without executing)
+python tools/loop.py --task "Add type hints to tools.py" --dry-run
+```
+
+### Key rules
+
+- **Completion promise** — an exact string Claude writes to `.loop_done` when done. Make it objectively checkable (tied to tests or build output).
+- **Idempotency guard** — `stop_hook_active: true` in the hook payload signals a recursive call; the hook exits 0 immediately to prevent infinite loops.
+- **Max iterations** — start with 10–20; tune based on task complexity. The hard cap always wins.
+- **Verification** — Claude should run tests/lint/build before writing the token, not just assume correctness.
+- **`loop_runner` skill** — use `POST /api/loop/plan` to have a local model decompose any task into a verifiable loop spec (sub-tasks, token, max_iter, shell verification commands).
+
+### Skill: `loop_runner`
+
+Output format: JSON
+
+```json
+{
+  "task_summary": "Fix failing unit tests",
+  "acceptance_criteria": ["pytest exits 0", "no ruff errors"],
+  "completion_token": "ALL_TESTS_PASS",
+  "recommended_max_iter": 12,
+  "sub_tasks": ["identify failing tests", "fix root causes", "run pytest"],
+  "verification_commands": ["pytest --tb=short", "ruff check ."],
+  "risk_level": "low",
+  "notes": "Check for import errors first"
+}
+```
+
+---
+
 ## Glossary
 
 | Term | Meaning |
@@ -243,3 +324,5 @@ open tools/inspector.html        # or http://localhost:8765/
 | **Phase** | A logical stage in a multi-step analysis pipeline |
 | **EventBus** | Async pub/sub that connects heartbeat, scheduler, watcher, and WebSocket |
 | **Provider** | A local LLM server (Ollama or Jan) — inspector auto-detects and routes |
+| **Loop** | A bounded autonomous iteration controlled by a stop hook and completion promise |
+| **Promise token** | A string Claude writes to `.loop_done` when all acceptance criteria are met |

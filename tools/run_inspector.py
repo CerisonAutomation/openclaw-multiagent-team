@@ -147,6 +147,22 @@ SKILL_INDEX: dict[str, SkillDef] = {
         '"security":<f>,"performance":<f>,"maintainability":<f>,"completeness":<f>,'
         '"lowest_dimension":"<name>","critical_fix":"<most important improvement>","summary":"<2-3 sentence verdict>"}',
         temperature=0.1),
+
+    "loop_runner": SkillDef(
+        "loop_runner",
+        "Plan a bounded autonomous loop: decompose task, write acceptance criteria and completion token",
+        "architect", "json",
+        'You are a task planner for a bounded autonomous agent loop (Ralph Wiggum pattern).\n'
+        'Given a task description, produce a precise loop specification. Respond ONLY with valid JSON:\n'
+        '{"task_summary":"<one sentence>",'
+        '"acceptance_criteria":["<verifiable criterion>"],'
+        '"completion_token":"<SCREAMING_SNAKE_CASE token Claude writes when done>",'
+        '"recommended_max_iter":<int 5-30>,'
+        '"sub_tasks":["<concrete step>"],'
+        '"verification_commands":["<shell command to verify success>"],'
+        '"risk_level":"<low|medium|high>",'
+        '"notes":"<anything the agent should watch out for>"}',
+        temperature=0.2, max_tokens=1024),
 }
 
 
@@ -935,6 +951,32 @@ async def chat(req: ChatRequest):
     return {"content": content, "model": chosen, "provider": prov}
 
 
+# ── loop planner ─────────────────────────────────────────────────────────────
+
+class LoopPlanRequest(BaseModel):
+    task: str
+    criteria: str = ""
+    model: str | None = None
+
+
+@app.post("/api/loop/plan")
+async def loop_plan(req: LoopPlanRequest):
+    """Run the loop_runner skill to produce a bounded-loop specification."""
+    source = req.task
+    if req.criteria:
+        source = f"Task: {req.task}\n\nAcceptance criteria: {req.criteria}"
+    result = await skill_index.run("loop_runner", source, model=req.model)
+    if not result.ok:
+        raise HTTPException(status_code=500, detail=result.error)
+    token = result.output.get("completion_token", "LOOP_DONE") if isinstance(result.output, dict) else "LOOP_DONE"
+    max_iter = result.output.get("recommended_max_iter", 20) if isinstance(result.output, dict) else 20
+    return {
+        "plan": result.output,
+        "model": result.model_used,
+        "cli_hint": f'python tools/loop.py --task "{req.task}" --promise {token} --max-iter {max_iter}',
+    }
+
+
 # ── scheduler ─────────────────────────────────────────────────────────────────
 
 @app.get("/api/schedule")
@@ -1016,5 +1058,6 @@ async def ws_endpoint(ws: WebSocket):
 # ══════════════════════════════════════════════════════════════════════════════
 
 if __name__ == "__main__":
-    uvicorn.run("tools.run_inspector:app", host=SERVER_HOST, port=SERVER_PORT,
-                reload=True, log_level="info")
+    # Use app object directly so the file runs from any CWD without package import tricks.
+    # For hot-reload during development: PYTHONPATH=. uvicorn tools.run_inspector:app --reload
+    uvicorn.run(app, host=SERVER_HOST, port=SERVER_PORT, log_level="info")
