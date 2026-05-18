@@ -46,7 +46,6 @@ import os
 import shutil
 import subprocess
 import sys
-import tempfile
 import textwrap
 import time
 
@@ -117,12 +116,12 @@ def run_loop(
     if model:
         cmd += ["--model", model]
 
-    print(f"╔══ Ralph Wiggum Loop ═══════════════════════════════════════════")
+    print("╔══ Ralph Wiggum Loop ═══════════════════════════════════════════")
     print(f"║  task       : {task[:72]}")
     print(f"║  token      : {token}")
     print(f"║  max_iter   : {max_iter}")
     print(f"║  model      : {model or 'default'}")
-    print(f"╚════════════════════════════════════════════════════════════════")
+    print("╚════════════════════════════════════════════════════════════════")
     print()
 
     if dry_run:

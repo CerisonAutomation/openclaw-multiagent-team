@@ -34,6 +34,10 @@ include = ["openclaw*"]
 line-length = 110
 target-version = "py310"
 
+[tool.ruff.lint.per-file-ignores]
+# run_inspector.py is an intentionally compact single-file server; E701/E702 are expected
+"tools/run_inspector.py" = ["E701", "E702"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"

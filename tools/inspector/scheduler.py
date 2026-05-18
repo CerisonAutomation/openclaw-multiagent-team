@@ -32,7 +32,7 @@ class EventBus:
         self._listeners.append(listener)
 
     def unsubscribe(self, listener: Listener) -> None:
-        self._listeners = [l for l in self._listeners if l is not listener]
+        self._listeners = [fn for fn in self._listeners if fn is not listener]
 
     async def emit(self, event: Event) -> None:
         for listener in list(self._listeners):

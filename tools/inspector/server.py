@@ -10,7 +10,6 @@ Then open tools/inspector.html in a browser.
 """
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 import time
@@ -20,10 +19,9 @@ from typing import Any
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, HTMLResponse
-from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from .agents import OllamaClient, SkillResult, skill_index
+from .agents import SkillResult, skill_index
 from .config import SKILL_INDEX, get_config
 from .scheduler import Event, FileWatcher, bus, heartbeat, scheduler
 from .tools import (
@@ -495,8 +493,6 @@ async def websocket_endpoint(ws: WebSocket):
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def _detect_language(src: str) -> str:
-    from .tools import compute_metrics  # avoid circular at module top
-
     import re as _re
 
     signals: dict[str, list[tuple[str, int]]] = {

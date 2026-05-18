@@ -296,14 +296,14 @@ def detect_language(src: str) -> str:
 
 def compute_metrics(src: str, lang: str) -> dict[str, Any]:
     lines = src.split("\n")
-    non_blank = [l for l in lines if l.strip()]
+    non_blank = [ln for ln in lines if ln.strip()]
     comment_re = re.compile(r"^\s*#") if lang in ("python","shell","yaml") else re.compile(r"^\s*(//|\*|/\*)")
-    comment_lines = sum(1 for l in lines if comment_re.match(l))
+    comment_lines = sum(1 for ln in lines if comment_re.match(ln))
     todos = len(re.findall(r"\b(TODO|FIXME|XXX|HACK)\b", src))
     branches = len(re.findall(r"\b(if|else|elif|for|while|switch|case|catch|try)\b", src))
     fn_count = len(re.findall(r"\b(function|def|fn)\b|=>", src))
-    longest = max((len(l) for l in lines), default=0)
-    avg = round(sum(len(l) for l in non_blank) / len(non_blank), 1) if non_blank else 0
+    longest = max((len(ln) for ln in lines), default=0)
+    avg = round(sum(len(ln) for ln in non_blank) / len(non_blank), 1) if non_blank else 0
     comment_ratio = round(comment_lines / len(non_blank), 3) if non_blank else 0
     cyclomatic_avg = round(branches / fn_count, 2) if fn_count else branches
     out: dict[str, Any] = {
@@ -374,15 +374,15 @@ def git_summary(path: str) -> ToolResult:
         r = run_shell(f"git -C {p} {cmd}", timeout=15)
         return r.output.strip() if r.ok else ""
     log = g("log --oneline -20")
-    commits = [l.split(" ", 1) for l in log.splitlines() if l]
+    commits = [ln.split(" ", 1) for ln in log.splitlines() if ln]
     return ToolResult(ok=True, data={
         "branch": g("branch --show-current"),
         "recent_commits": [{"hash": c[0], "message": c[1]} for c in commits if len(c) == 2],
-        "authors": [l.strip() for l in g("shortlog -sn --no-merges -20").splitlines()],
+        "authors": [ln.strip() for ln in g("shortlog -sn --no-merges -20").splitlines()],
         "last_diff_stat": g("diff --stat HEAD~1 HEAD 2>/dev/null || echo '(no prior commit)'"),
         "stash_count": len(g("stash list").splitlines()),
         "tags": [t.strip() for t in g("tag --sort=-version:refname -l | head -5").splitlines()],
-        "uncommitted": [l.strip() for l in g("status --short").splitlines()],
+        "uncommitted": [ln.strip() for ln in g("status --short").splitlines()],
     })
 
 
@@ -633,7 +633,7 @@ class EventBus:
         self._listeners.append(fn)
 
     def unsubscribe(self, fn: Listener) -> None:
-        self._listeners = [l for l in self._listeners if l is not fn]
+        self._listeners = [cb for cb in self._listeners if cb is not fn]
 
     async def emit(self, event: Event) -> None:
         for fn in list(self._listeners):

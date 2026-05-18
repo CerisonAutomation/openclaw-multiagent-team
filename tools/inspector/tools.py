@@ -106,15 +106,21 @@ class _ASTVisitor(ast.NodeVisitor):
         self.metrics.functions.append(node.name)
         for d in node.decorator_list:
             self.metrics.decorators.append(ast.unparse(d) if hasattr(ast, "unparse") else "?")
-        self._enter(); self.generic_visit(node); self._exit()
+        self._enter()
+        self.generic_visit(node)
+        self._exit()
 
     def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
         self.metrics.async_functions.append(node.name)
-        self._enter(); self.generic_visit(node); self._exit()
+        self._enter()
+        self.generic_visit(node)
+        self._exit()
 
     def visit_ClassDef(self, node: ast.ClassDef) -> None:
         self.metrics.classes.append(node.name)
-        self._enter(); self.generic_visit(node); self._exit()
+        self._enter()
+        self.generic_visit(node)
+        self._exit()
 
     def visit_Import(self, node: ast.Import) -> None:
         for alias in node.names:
@@ -153,17 +159,17 @@ def analyze_python_ast(src: str) -> ASTMetrics:
 
 def compute_metrics(src: str, lang: str) -> dict[str, Any]:
     lines = src.split("\n")
-    non_blank = [l for l in lines if l.strip()]
+    non_blank = [ln for ln in lines if ln.strip()]
     comment_re = (
         re.compile(r"^\s*#") if lang in ("python", "shell", "yaml")
         else re.compile(r"^\s*(//|\*|/\*)")
     )
-    comment_lines = sum(1 for l in lines if comment_re.match(l))
+    comment_lines = sum(1 for ln in lines if comment_re.match(ln))
     todos = len(re.findall(r"\b(TODO|FIXME|XXX|HACK)\b", src))
     branches = len(re.findall(r"\b(if|else|elif|for|while|switch|case|catch|try)\b", src))
     fn_count = len(re.findall(r"\b(function|def|fn)\b|=>", src))
-    longest_line = max((len(l) for l in lines), default=0)
-    avg_line = round(sum(len(l) for l in non_blank) / len(non_blank), 1) if non_blank else 0
+    longest_line = max((len(ln) for ln in lines), default=0)
+    avg_line = round(sum(len(ln) for ln in non_blank) / len(non_blank), 1) if non_blank else 0
     comment_ratio = round(comment_lines / len(non_blank), 3) if non_blank else 0
     cyclomatic_avg = round(branches / fn_count, 2) if fn_count else branches
     byte_count = len(src.encode())
@@ -252,18 +258,18 @@ def git_summary(repo_path: str) -> ToolResult:
     tags = git("tag --sort=-version:refname -l | head -5")
     uncommitted = git("status --short")
 
-    commits = [l.split(" ", 1) for l in log_raw.splitlines() if l]
+    commits = [ln.split(" ", 1) for ln in log_raw.splitlines() if ln]
 
     return ToolResult(
         ok=True,
         data={
             "branch": branch,
             "recent_commits": [{"hash": c[0], "message": c[1]} for c in commits if len(c) == 2],
-            "authors": [l.strip() for l in authors.splitlines()],
+            "authors": [ln.strip() for ln in authors.splitlines()],
             "last_diff_stat": stat,
             "stash_count": len(stash.splitlines()) if stash else 0,
             "tags": [t.strip() for t in tags.splitlines()],
-            "uncommitted_files": [l.strip() for l in uncommitted.splitlines()],
+            "uncommitted_files": [ln.strip() for ln in uncommitted.splitlines()],
         },
     )
 
