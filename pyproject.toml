@@ -19,6 +19,7 @@ anthropic = ["anthropic>=0.40"]
 openai = ["openai>=1.50"]
 all = ["anthropic>=0.40", "openai>=1.50"]
 dev = ["pytest>=8.0", "pytest-asyncio>=0.23", "ruff>=0.6", "anthropic>=0.40", "openai>=1.50"]
+browser = ["playwright>=1.40"]
 
 [project.scripts]
 openclaw = "openclaw.cli:main"
@@ -34,9 +35,6 @@ include = ["openclaw*"]
 line-length = 110
 target-version = "py310"
 
-[tool.ruff.lint.per-file-ignores]
-# run_inspector.py is an intentionally compact single-file server; E701/E702 are expected
-"tools/run_inspector.py" = ["E701", "E702"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
