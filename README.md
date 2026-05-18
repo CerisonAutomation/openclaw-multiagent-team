@@ -47,7 +47,8 @@ Sonnet↔Haiku routing).
 | `openai`     | `gpt-4o-mini`                                | OpenAI direct. |
 | `groq`       | `llama-3.3-70b-versatile`                    | Fastest tokens/sec. |
 | `deepseek`   | `deepseek-chat`                              | Cheapest. |
-| `ollama`     | `llama3.1:latest`                            | Local. No cost. No network. |
+| `ollama`     | `mistral:latest` (routing) / `deepseek-r1:8b` (reasoning) / `qwen2.5-coder:7b` (code) | Local. No cost. No network. |
+| `jan`        | auto-detected from running Jan instance      | Local fallback when Ollama is offline. |
 | `mock`       | `mock-1`                                     | Offline dry-run for CI / smoke tests. |
 
 Auto-detect tries them in the order shown (so `openrouter` and `nvidia` win
@@ -205,12 +206,92 @@ openclaw/
 Everything theatrical was dropped. Every pattern kept was implemented as
 runnable Python with tests.
 
+## Local LLM inspector (Ollama + Jan)
+
+A second tool stack for running **all agents locally** — no API keys, no cloud:
+
+```bash
+# start the inspector server
+python tools/run_inspector.py        # FastAPI on :8765
+
+# or run a one-off skill directly
+curl -X POST http://localhost:8765/api/skills/run \
+  -H 'content-type: application/json' \
+  -d '{"skill":"critic","source":"def foo(): pass","provider":"auto"}'
+```
+
+**Model routing** (uses best installed model per role, auto-detected):
+
+| Role | First choice | Fallback |
+|------|-------------|---------|
+| intent / summarizer | `mistral` | `llama3`, `qwen` |
+| architect / critic | `deepseek-r1` | `qwen3`, `llama3` |
+| coder / reviewer / tester | `qwen2.5-coder` | `qwen3`, `deepseek-r1` |
+| fixer | `deepseek-r1` | `qwen2.5-coder` |
+
+Jan is used automatically as a fallback if Ollama is offline.
+
+**Inspector API endpoints:**
+
+| Method | Path | What it does |
+|--------|------|-------------|
+| GET | `/api/providers` | Ollama + Jan status, active provider |
+| GET | `/api/skills` | List all 9 built-in skills |
+| POST | `/api/skills/run` | Run a skill on source code |
+| POST | `/api/relay` | Relay: auto-classify intent → pick tools → synthesize |
+| POST | `/api/loop/plan` | Plan a bounded autonomous loop |
+| GET | `/api/relay/history/{id}` | Session history |
+| WS | `/ws` | Real-time skill results |
+
+---
+
+## Browser tools (Playwright MCP)
+
+The project ships a `.mcp.json` that gives Claude Code a real browser. Once set
+up, **you just ask in plain English** — no code needed:
+
+> "Go to github.com/cerisonautomation and screenshot the repo list"
+> "Fill in the login form at localhost:3000 with user=admin pass=test and click submit"
+> "Scrape the pricing table from that URL and give me a JSON list"
+> "Check if the deploy at https://myapp.vercel.app actually loads"
+
+Claude navigates, clicks, fills forms, screenshots, and reads page content on
+your behalf.
+
+### Setup (one-time, on your local machine)
+
+```bash
+# 1. Install Node.js if you don't have it — https://nodejs.org
+# 2. Install the MCP server
+npm install -g @playwright/mcp
+# 3. Install the browser
+npx playwright install chromium
+# 4. Open this project in Claude Code — browser tools appear automatically
+claude .
+```
+
+The `.mcp.json` in the project root registers the server. Claude Code picks it
+up on start; no further config needed.
+
+### What Claude can do with the browser
+
+| You say | Claude does |
+|---------|------------|
+| "Go to X and screenshot it" | navigates + takes screenshot shown to you |
+| "Click the Sign Up button" | finds + clicks the element |
+| "Fill in email field with foo@bar.com" | types into the form |
+| "Extract all links from that page" | reads DOM, returns list |
+| "Run `document.title` on that page" | executes JS, returns result |
+| "Check if the button is disabled" | reads element state |
+
+---
+
 ## Testing
 
 ```bash
 pip install -e ".[dev]"
 pytest -q
-# 28 passed
+# 92 passed
 ```
 
 The whole suite runs against `MockProvider` — no API key required, no network.
